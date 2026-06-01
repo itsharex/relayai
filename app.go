@@ -242,6 +242,26 @@ func (a *App) SetAppearanceMode(mode string) {
 	native.SetWindowAppearance(hwnd, mode)
 }
 
+// --- Window Controls (frameless mode on Windows) ---
+
+func (a *App) WindowMinimise() {
+	if a.win != nil {
+		a.win.Minimise()
+	}
+}
+
+func (a *App) WindowToggleMaximise() {
+	if a.win != nil {
+		a.win.ToggleMaximise()
+	}
+}
+
+func (a *App) WindowClose() {
+	if a.win != nil {
+		a.win.Close()
+	}
+}
+
 // --- Debug Mode ---
 
 func (a *App) GetDebugMode() bool {

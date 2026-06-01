@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -16,7 +17,10 @@ import (
 var assets embed.FS
 
 //go:embed build/darwin/tray/statusbar_template_3x.png
-var trayIcon []byte
+var trayIconMac []byte
+
+//go:embed build/appicon.png
+var trayIconWin []byte
 
 func main() {
 	unlock, err := singleinstance.LockFile()
@@ -45,7 +49,7 @@ func main() {
 		},
 	})
 
-	win := a.Window.NewWithOptions(application.WebviewWindowOptions{
+	winOpts := application.WebviewWindowOptions{
 		Title:            "RelayAI",
 		Width:            900,
 		Height:           640,
@@ -62,7 +66,18 @@ func main() {
 			},
 			InvisibleTitleBarHeight: 40,
 		},
-	})
+	}
+
+	// On Windows 11, use frameless window with Mica backdrop for a modern look.
+	if runtime.GOOS == "windows" {
+		winOpts.Frameless = true
+		winOpts.BackgroundType = application.BackgroundTypeTranslucent
+		winOpts.Windows = application.WindowsWindow{
+			BackdropType: application.Mica,
+		}
+	}
+
+	win := a.Window.NewWithOptions(winOpts)
 
 	app.setWindow(win)
 
@@ -79,6 +94,10 @@ func main() {
 	})
 
 	tray := a.SystemTray.New()
+	trayIcon := trayIconMac
+	if runtime.GOOS != "darwin" {
+		trayIcon = trayIconWin
+	}
 	tray.SetIcon(trayIcon)
 	tray.SetTooltip("RelayAI")
 

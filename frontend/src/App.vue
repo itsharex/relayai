@@ -4,6 +4,7 @@ import { dateZhCN, zhCN } from 'naive-ui'
 import { useTheme } from './composables/useTheme'
 import type { ThemeMode } from './composables/useTheme'
 import * as App from '../bindings/relay-ai/app'
+import { WindowMinimise, WindowToggleMaximise, WindowClose } from '../bindings/relay-ai/app'
 import ProvidersView from './views/ProvidersView.vue'
 import LogViewer from './components/LogViewer.vue'
 import AboutView from './views/AboutView.vue'
@@ -33,6 +34,10 @@ function onDebugClose() {
   debugPageVisible.value = false
   activeTab.value = 'about'
 }
+
+function onMinimise() { WindowMinimise().catch(() => {}) }
+function onMaximise() { WindowToggleMaximise().catch(() => {}) }
+function onClose() { WindowClose().catch(() => {}) }
 
 const { themeMode, theme, setTheme } = useTheme()
 
@@ -73,18 +78,29 @@ watch(themeMode, (val) => {
               @click="activeTab = tab.key"
             >{{ tab.label }}</button>
           </div>
-          <div class="theme-switcher">
-            <button
-              v-for="opt in themeOptions"
-              :key="opt.value"
-              class="theme-btn"
-              :class="{ active: themeMode === opt.value }"
-              @click="setTheme(opt.value)"
-            >{{ opt.label }}</button>
+          <div class="titlebar-right">
+            <div class="theme-switcher">
+              <button
+                v-for="opt in themeOptions"
+                :key="opt.value"
+                class="theme-btn"
+                :class="{ active: themeMode === opt.value }"
+                @click="setTheme(opt.value)"
+              >{{ opt.label }}</button>
+            </div>
+            <div v-if="!isMac" class="win-controls">
+              <button class="win-ctrl-btn" title="最小化" @click="onMinimise">
+                <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+              </button>
+              <button class="win-ctrl-btn" title="最大化" @click="onMaximise">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"/></svg>
+              </button>
+              <button class="win-ctrl-btn win-ctrl-close" title="关闭" @click="onClose">
+                <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.2"><line x1="0" y1="0" x2="10" y2="10"/><line x1="10" y1="0" x2="0" y2="10"/></svg>
+              </button>
+            </div>
           </div>
         </div>
-
-        <div v-if="!isMac" class="titlebar-spacer titlebar-spacer-right"></div>
       </div>
 
       <div class="app-content">
@@ -131,8 +147,11 @@ watch(themeMode, (val) => {
   width: 70px;
 }
 
-.titlebar-spacer-right {
-  width: 140px;
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .titlebar-content {
@@ -213,6 +232,37 @@ watch(themeMode, (val) => {
   color: var(--app-success);
   background: rgba(24, 160, 88, 0.08);
   font-weight: 600;
+}
+
+/* ---- Windows window controls ---- */
+.win-controls {
+  display: flex;
+  align-items: center;
+  margin-left: 4px;
+}
+
+.win-ctrl-btn {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--app-text-2);
+  cursor: pointer;
+  padding: 0;
+  border-radius: 0;
+}
+
+.win-ctrl-btn:hover {
+  background: var(--app-fill-2);
+}
+
+.win-ctrl-btn.win-ctrl-close:hover {
+  background: #c42b1c;
+  color: #fff;
 }
 
 /* ---- Content ---- */
