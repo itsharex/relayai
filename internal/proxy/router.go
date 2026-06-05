@@ -163,6 +163,12 @@ func makeHandler(store *config.Store, logger *Logger, sessions *SessionStore, cl
 			canFallback := i < len(providers)-1
 			result := tryProvider(w, r, upstreamURL, providerBody, &provider, canFallback, needResponseConversion, sessions, requestModel, requestMessages)
 			if result.StatusCode > 0 {
+				// Use response model if available, otherwise use request model
+				logModel := actualModel
+				if result.ResponseModel != "" {
+					logModel = result.ResponseModel
+				}
+
 				logger.Add(RequestLog{
 					Method:           r.Method,
 					Path:             upstreamURL,
@@ -170,7 +176,7 @@ func makeHandler(store *config.Store, logger *Logger, sessions *SessionStore, cl
 					CLIType:          cliType,
 					ProviderID:       provider.ID,
 					Provider:         provider.Name,
-					Model:            actualModel,
+					Model:            logModel,
 					StatusCode:       result.StatusCode,
 					Duration:         time.Since(start).Milliseconds(),
 					ResponseBody:     result.ResponseBody,
@@ -184,7 +190,14 @@ func makeHandler(store *config.Store, logger *Logger, sessions *SessionStore, cl
 			lastErr = result.Error
 			lastRespBody = result.ResponseBody
 			lastUpstreamURL = upstreamURL
-			slog.Warn("provider failed, trying next", "cli", cliType, "provider", provider.Name)
+			slog.Warn("provider failed, trying next",
+				"cli", cliType,
+				"provider", provider.Name,
+				"model", actualModel,
+				"status", result.StatusCode,
+				"error", result.Error,
+				"response", result.ResponseBody,
+			)
 		}
 
 		logger.Add(RequestLog{

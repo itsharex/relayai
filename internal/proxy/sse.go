@@ -373,6 +373,12 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 
 	if !streamDone {
 		// Stream disconnected before [DONE]
+		slog.Error("stream incomplete",
+			"model", requestModel,
+			"chunks", chunkCount,
+			"has_tool_calls", len(toolCalls) > 0,
+			"text_length", accumulatedText.Len(),
+		)
 		writeEvent("response.failed", map[string]any{
 			"response": map[string]any{
 				"id":     responseID,

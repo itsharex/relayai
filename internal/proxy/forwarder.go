@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,12 +22,121 @@ type tryProviderResult struct {
 	StatusCode       int
 	Error            string
 	ResponseBody     string
+	ResponseModel    string
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
 }
 
+// UnsupportedContentError indicates the request contains content types
+// not supported by the target provider.
+type UnsupportedContentError struct {
+	Details string
+}
+
+func (e *UnsupportedContentError) Error() string {
+	return fmt.Sprintf("unsupported content: %s", e.Details)
+}
+
+// validateContentForProvider checks if the request body contains content
+// that is not supported by the provider (e.g., images for providers that don't support them).
+// Returns nil if content is compatible, or UnsupportedContentError if not.
+func validateContentForProvider(body []byte, provider *config.Provider) *UnsupportedContentError {
+	if len(body) == 0 {
+		return nil
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil
+	}
+
+	messages, ok := m["messages"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var unsupported []string
+
+	for _, msg := range messages {
+		msgMap, ok := msg.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		content, ok := msgMap["content"]
+		if !ok {
+			continue
+		}
+
+		// Check content array for unsupported types
+		if contentArr, ok := content.([]any); ok {
+			for _, item := range contentArr {
+				itemMap, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				itemType, _ := itemMap["type"].(string)
+				switch itemType {
+				case "input_image", "image_url":
+					unsupported = append(unsupported, "image (input_image/image_url)")
+				case "input_file":
+					unsupported = append(unsupported, "file (input_file)")
+				}
+			}
+		}
+	}
+
+	// Check tools for unsupported types
+	if tools, ok := m["tools"].([]any); ok {
+		for _, tool := range tools {
+			toolMap, ok := tool.(map[string]any)
+			if !ok {
+				continue
+			}
+			toolType, _ := toolMap["type"].(string)
+			if toolType != "" && toolType != "function" {
+				unsupported = append(unsupported, fmt.Sprintf("tool type '%s'", toolType))
+			}
+		}
+	}
+
+	if len(unsupported) > 0 {
+		// Deduplicate
+		seen := make(map[string]bool)
+		var unique []string
+		for _, u := range unsupported {
+			if !seen[u] {
+				seen[u] = true
+				unique = append(unique, u)
+			}
+		}
+		return &UnsupportedContentError{
+			Details: strings.Join(unique, ", "),
+		}
+	}
+
+	return nil
+}
+
 func tryProvider(w http.ResponseWriter, r *http.Request, upstreamURL string, body []byte, provider *config.Provider, canFallback bool, convertToResponses bool, sessions *SessionStore, requestModel string, requestMessages []map[string]any) tryProviderResult {
+	// Validate content compatibility before making the request
+	if !convertToResponses {
+		if unsupported := validateContentForProvider(body, provider); unsupported != nil {
+			slog.Warn("unsupported content detected",
+				"provider", provider.Name,
+				"cli_types", provider.CLITypes,
+				"details", unsupported.Details,
+			)
+			return tryProviderResult{
+				StatusCode: http.StatusBadRequest,
+				Error:      unsupported.Error(),
+				ResponseBody: fmt.Sprintf(`{"error":{"type":"unsupported_content_error","message":"Provider '%s' does not support: %s. Please use a provider that supports these content types or remove them from your request.","details":"%s"}}`,
+					provider.Name, unsupported.Details, unsupported.Details),
+			}
+		}
+	}
+
 	var writeMu sync.Mutex
 	var reqBody io.Reader
 	if len(body) > 0 {
@@ -123,11 +233,11 @@ func tryProvider(w http.ResponseWriter, r *http.Request, upstreamURL string, bod
 	defer upResp.Body.Close()
 
 	if isStream {
-		p, c, t := forwardStream(r.Context(), w, upResp, convertToResponses, sessions, requestModel, requestMessages, preResponseID, keepAliveDone, &writeMu)
+		p, c, t, model := forwardStream(r.Context(), w, upResp, convertToResponses, sessions, requestModel, requestMessages, preResponseID, keepAliveDone, &writeMu)
 		if keepAliveDone != nil {
 			close(keepAliveDone)
 		}
-		return tryProviderResult{StatusCode: upResp.StatusCode, PromptTokens: p, CompletionTokens: c, TotalTokens: t}
+		return tryProviderResult{StatusCode: upResp.StatusCode, ResponseModel: model, PromptTokens: p, CompletionTokens: c, TotalTokens: t}
 	}
 
 	respBody, readErr := io.ReadAll(upResp.Body)
@@ -135,7 +245,23 @@ func tryProvider(w http.ResponseWriter, r *http.Request, upstreamURL string, bod
 		slog.Error("upstream body read error", "status", upResp.StatusCode, "model", requestModel, "error", readErr)
 	}
 
-	if canFallback && upResp.StatusCode >= 500 {
+	// Log HTTP error responses for debugging
+	if upResp.StatusCode >= 400 {
+		slog.Warn("upstream HTTP error",
+			"provider", provider.Name,
+			"model", requestModel,
+			"status", upResp.StatusCode,
+			"response", sanitizeResponseBody(respBody),
+		)
+	}
+
+	// Fallback on server errors (5xx) and certain client errors (400 Bad Request, 415 Unsupported Media Type)
+	// These often indicate content format issues that another provider might handle better
+	if canFallback && (upResp.StatusCode >= 500 || upResp.StatusCode == 400 || upResp.StatusCode == 415) {
+		slog.Warn("triggering fallback due to HTTP error",
+			"provider", provider.Name,
+			"status", upResp.StatusCode,
+		)
 		return tryProviderResult{ResponseBody: sanitizeResponseBody(respBody)}
 	}
 
@@ -163,12 +289,26 @@ func tryProvider(w http.ResponseWriter, r *http.Request, upstreamURL string, bod
 		respBodyStr = sanitizeResponseBody(respBody)
 	}
 	p, c, t := extractTokenUsage(respBody)
+	responseModel := extractResponseModel(respBody)
 
-	return tryProviderResult{StatusCode: upResp.StatusCode, ResponseBody: respBodyStr, PromptTokens: p, CompletionTokens: c, TotalTokens: t}
+	return tryProviderResult{StatusCode: upResp.StatusCode, ResponseBody: respBodyStr, ResponseModel: responseModel, PromptTokens: p, CompletionTokens: c, TotalTokens: t}
+}
+
+// extractResponseModel extracts the model field from a response body.
+func extractResponseModel(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return ""
+	}
+	model, _ := m["model"].(string)
+	return model
 }
 
 // forwardStream forwards the upstream SSE response, optionally converting to Responses API format.
-func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Response, convert bool, sessions *SessionStore, requestModel string, requestMessages []map[string]any, preResponseID string, keepAliveDone chan struct{}, writeMu *sync.Mutex) (promptTokens, completionTokens, totalTokens int) {
+func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Response, convert bool, sessions *SessionStore, requestModel string, requestMessages []map[string]any, preResponseID string, keepAliveDone chan struct{}, writeMu *sync.Mutex) (promptTokens, completionTokens, totalTokens int, responseModel string) {
 	flusher, canFlush := w.(http.Flusher)
 
 	if convert {
@@ -186,7 +326,7 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 			}
 			convertedBody, _ := fromChatResponse(respBody, responseID, model, sessions)
 			p, c, t := synthesizeResponsesSSE(w, convertedBody, flusher, canFlush, model, sessions, preResponseID)
-			return p, c, t
+			return p, c, t, ""
 		}
 		// For streaming mode
 		model := requestModel
@@ -194,7 +334,7 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 			model = "unknown"
 		}
 		p, c, t := translateStream(ctx, w, resp, flusher, canFlush, model, sessions, requestMessages, preResponseID, keepAliveDone, writeMu)
-		return p, c, t
+		return p, c, t, ""
 	}
 
 	// Passthrough mode
@@ -266,11 +406,60 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 		resp.Body.Close()
 	}()
 
+	// Track token usage and model from Anthropic streaming events
+	var streamPromptTokens, streamCompletionTokens int
+	var streamModel string
+	var currentEventType string
+
 	fwdChunkCount := 0
 	for scanner.Scan() {
 		fwdLastActivityUnixNano = time.Now().UnixNano()
 		fwdChunkCount++
 		line := scanner.Text()
+
+		// Parse Anthropic SSE events to extract token usage and model
+		if after, ok := strings.CutPrefix(line, "event: "); ok {
+			currentEventType = after
+		} else if after, ok := strings.CutPrefix(line, "data: "); ok {
+			switch currentEventType {
+			case "message_start":
+				// message_start contains message.model and message.usage.input_tokens
+				var event struct {
+					Type    string `json:"type"`
+					Message struct {
+						Model string `json:"model"`
+						Usage struct {
+							InputTokens  int `json:"input_tokens"`
+							OutputTokens int `json:"output_tokens"`
+						} `json:"usage"`
+					} `json:"message"`
+				}
+				dataStr := after
+				if json.Unmarshal([]byte(dataStr), &event) == nil {
+					if event.Message.Model != "" {
+						streamModel = event.Message.Model
+					}
+					if event.Message.Usage.InputTokens > 0 {
+						streamPromptTokens = event.Message.Usage.InputTokens
+					}
+				}
+			case "message_delta":
+				// message_delta contains usage.output_tokens
+				var event struct {
+					Type  string `json:"type"`
+					Usage struct {
+						OutputTokens int `json:"output_tokens"`
+					} `json:"usage"`
+				}
+				dataStr := strings.TrimPrefix(line, "data: ")
+				if json.Unmarshal([]byte(dataStr), &event) == nil {
+					if event.Usage.OutputTokens > 0 {
+						streamCompletionTokens = event.Usage.OutputTokens
+					}
+				}
+			}
+		}
+
 		writeMu.Lock()
 		if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
 			writeMu.Unlock()
@@ -308,16 +497,29 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 		}
 		slog.Error("passthrough scanner error", "category", errCategory, "model", requestModel, "error", err)
 	}
-	slog.Debug("passthrough stream completed",
+	// Log stream completion at appropriate level
+	logLevel := slog.LevelDebug
+	logMsg := "passthrough stream completed"
+	logArgs := []any{
 		"chunks", fwdChunkCount,
 		"duration", time.Since(fwdStart).String(),
-		"model", requestModel,
-	)
+		"request_model", requestModel,
+		"response_model", streamModel,
+		"prompt_tokens", streamPromptTokens,
+		"completion_tokens", streamCompletionTokens,
+	}
+	if fwdChunkCount == 0 {
+		logLevel = slog.LevelWarn
+		logMsg = "passthrough stream completed with no data chunks"
+	} else if streamPromptTokens == 0 && streamCompletionTokens == 0 {
+		logArgs = append(logArgs, "note", "no token usage data extracted")
+	}
+	slog.Log(ctx, logLevel, logMsg, logArgs...)
 	if passthroughKeepAliveDone != nil {
 		close(passthroughKeepAliveDone)
 	}
 	if canFlush {
 		flusher.Flush()
 	}
-	return
+	return streamPromptTokens, streamCompletionTokens, streamPromptTokens + streamCompletionTokens, streamModel
 }

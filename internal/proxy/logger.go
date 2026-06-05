@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	usageRetention = 12 * time.Hour // 用量曲线保留 12 小时
-	maxLogCount    = 10000          // 日志最多保留 10000 条
+	usageRetention = 7 * 24 * time.Hour // 用量曲线保留 7 天
+	maxLogCount    = 5000               // 日志最多保留 5000 条
 )
 
 type RequestLog struct {
@@ -64,12 +64,12 @@ func (l *Logger) init() {
 }
 
 // cleanupLoop runs periodic cleanup in the background.
-// Removes old usage points (>12h) and excess logs (>10000 or >7d).
+// Removes old usage points (>7d) and excess logs (>5000 or >7d).
 func (l *Logger) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
-		// 删除超过 12 小时的用量曲线
+		// 删除超过 7 天的用量曲线
 		cutoff := time.Now().Add(-usageRetention).UnixMilli()
 		if _, err := l.db.Exec("DELETE FROM provider_usage_points WHERE bucket_start < ?", cutoff); err != nil {
 			slog.Error("failed to cleanup old usage points", "error", err)

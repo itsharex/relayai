@@ -93,8 +93,12 @@ function buildChart(points: ProviderUsagePoint[]) {
   const axisBottom = padding.top + innerHeight
   const axisRight = padding.left + innerWidth
 
+  // Compute bar width first so xPos can add a margin to prevent bars overlapping the Y axis.
+  const barWidth = points.length <= 1 ? 14 : Math.max(4, Math.min(14, innerWidth / points.length * 0.2))
+  const barMargin = points.length <= 1 ? 0 : barWidth / 2 + 4
+
   function xPos(index: number) {
-    return padding.left + (points.length <= 1 ? innerWidth / 2 : (index / (points.length - 1)) * innerWidth)
+    return padding.left + (points.length <= 1 ? innerWidth / 2 : barMargin + (index / (points.length - 1)) * (innerWidth - 2 * barMargin))
   }
 
   function yPos(value: number) {
@@ -137,8 +141,6 @@ function buildChart(points: ProviderUsagePoint[]) {
   }
 
   // 柱状图：输入/输出叠加，高度以总量为准
-  const barWidth = points.length <= 1 ? 40 : Math.max(6, Math.min(40, innerWidth / points.length * 0.6))
-
   const bars = points.map((p, i) => {
     const cx = xPos(i)
     const totalVal = p.total_tokens || 0
