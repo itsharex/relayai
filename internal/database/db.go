@@ -71,6 +71,7 @@ func (db *DB) createTables() error {
 			prompt_tokens INTEGER DEFAULT 0,
 			completion_tokens INTEGER DEFAULT 0,
 			total_tokens INTEGER DEFAULT 0,
+			cached_tokens INTEGER DEFAULT 0,
 			usage_updated_at INTEGER DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS request_logs (
@@ -93,6 +94,7 @@ func (db *DB) createTables() error {
 			prompt_tokens INTEGER DEFAULT 0,
 			completion_tokens INTEGER DEFAULT 0,
 			total_tokens INTEGER DEFAULT 0,
+			cached_tokens INTEGER DEFAULT 0,
 			PRIMARY KEY (provider_id, bucket_start)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_request_logs_time ON request_logs(time)`,
@@ -112,17 +114,20 @@ func (db *DB) createTables() error {
 
 func (db *DB) migrateTables() error {
 	columns := map[string]string{
-		"providers.prompt_tokens":        "ALTER TABLE providers ADD COLUMN prompt_tokens INTEGER DEFAULT 0",
-		"providers.completion_tokens":    "ALTER TABLE providers ADD COLUMN completion_tokens INTEGER DEFAULT 0",
-		"providers.total_tokens":         "ALTER TABLE providers ADD COLUMN total_tokens INTEGER DEFAULT 0",
-		"providers.usage_updated_at":     "ALTER TABLE providers ADD COLUMN usage_updated_at INTEGER DEFAULT 0",
-		"request_logs.provider_id":       "ALTER TABLE request_logs ADD COLUMN provider_id TEXT",
-		"request_logs.upstream_url":      "ALTER TABLE request_logs ADD COLUMN upstream_url TEXT",
-		"providers.auth_token":           "ALTER TABLE providers ADD COLUMN auth_token TEXT",
-		"providers.chat_compat_mode":     "ALTER TABLE providers ADD COLUMN chat_compat_mode INTEGER DEFAULT 0",
-		"request_logs.prompt_tokens":     "ALTER TABLE request_logs ADD COLUMN prompt_tokens INTEGER DEFAULT 0",
-		"request_logs.completion_tokens": "ALTER TABLE request_logs ADD COLUMN completion_tokens INTEGER DEFAULT 0",
-		"request_logs.total_tokens":      "ALTER TABLE request_logs ADD COLUMN total_tokens INTEGER DEFAULT 0",
+		"providers.prompt_tokens":             "ALTER TABLE providers ADD COLUMN prompt_tokens INTEGER DEFAULT 0",
+		"providers.completion_tokens":         "ALTER TABLE providers ADD COLUMN completion_tokens INTEGER DEFAULT 0",
+		"providers.total_tokens":              "ALTER TABLE providers ADD COLUMN total_tokens INTEGER DEFAULT 0",
+		"providers.cached_tokens":             "ALTER TABLE providers ADD COLUMN cached_tokens INTEGER DEFAULT 0",
+		"providers.usage_updated_at":          "ALTER TABLE providers ADD COLUMN usage_updated_at INTEGER DEFAULT 0",
+		"request_logs.provider_id":            "ALTER TABLE request_logs ADD COLUMN provider_id TEXT",
+		"request_logs.upstream_url":           "ALTER TABLE request_logs ADD COLUMN upstream_url TEXT",
+		"providers.auth_token":                "ALTER TABLE providers ADD COLUMN auth_token TEXT",
+		"providers.chat_compat_mode":          "ALTER TABLE providers ADD COLUMN chat_compat_mode INTEGER DEFAULT 0",
+		"request_logs.prompt_tokens":          "ALTER TABLE request_logs ADD COLUMN prompt_tokens INTEGER DEFAULT 0",
+		"request_logs.completion_tokens":      "ALTER TABLE request_logs ADD COLUMN completion_tokens INTEGER DEFAULT 0",
+		"request_logs.total_tokens":           "ALTER TABLE request_logs ADD COLUMN total_tokens INTEGER DEFAULT 0",
+		"request_logs.cached_tokens":          "ALTER TABLE request_logs ADD COLUMN cached_tokens INTEGER DEFAULT 0",
+		"provider_usage_points.cached_tokens": "ALTER TABLE provider_usage_points ADD COLUMN cached_tokens INTEGER DEFAULT 0",
 	}
 
 	for key, statement := range columns {

@@ -26,6 +26,17 @@ const showPrompt = ref(true)
 const showCompletion = ref(true)
 const showTotal = ref(true)
 
+
+const cacheHitRate = computed(() => {
+  if (!props.provider || props.provider.prompt_tokens === 0) return 0
+  return Math.round((props.provider.cached_tokens / props.provider.prompt_tokens) * 100)
+})
+
+const cacheHitRateText = computed(() => {
+  if (!props.provider || props.provider.prompt_tokens === 0) return '--'
+  return cacheHitRate.value + '%'
+})
+
 const cliLabels: Record<string, string> = Object.fromEntries(
   CLI_TYPES.map(t => [t.key, t.label])
 )
@@ -146,6 +157,7 @@ function buildChart(points: ProviderUsagePoint[]) {
     const totalVal = p.total_tokens || 0
     const promptVal = p.prompt_tokens || 0
     const completionVal = p.completion_tokens || 0
+    const cachedVal = p.cached_tokens || 0
     const totalH = totalVal / maxValue * innerHeight
     const promptH = totalVal > 0 ? (promptVal / totalVal) * totalH : 0
     const completionH = totalVal > 0 ? (completionVal / totalVal) * totalH : 0
@@ -190,6 +202,8 @@ function buildChart(points: ProviderUsagePoint[]) {
     prompt_tokens: p.prompt_tokens || 0,
     completion_tokens: p.completion_tokens || 0,
     total_tokens: p.total_tokens || 0,
+    cached_tokens: p.cached_tokens || 0,
+    cached_rate: p.prompt_tokens > 0 ? Math.round((p.cached_tokens || 0) / p.prompt_tokens * 100) : 0,
   }))
 
   return {
@@ -276,7 +290,7 @@ function handleChartMouseLeave() {
         </div>
       </div>
 
-      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px">
         <div style="padding: 12px; border: 1px solid var(--app-border); border-radius: 6px">
           <n-text depth="3" style="font-size: 12px; display: block">输入用量</n-text>
           <n-text strong style="font-size: 20px">{{ formatTokens(provider.prompt_tokens) }}</n-text>
@@ -289,24 +303,30 @@ function handleChartMouseLeave() {
           <n-text depth="3" style="font-size: 12px; display: block">总用量</n-text>
           <n-text strong style="font-size: 20px">{{ formatTokens(provider.total_tokens) }}</n-text>
         </div>
+        <div style="padding: 12px; border: 1px solid var(--app-border); border-radius: 6px">
+          <n-text depth="3" style="font-size: 12px; display: block">缓存命中率</n-text>
+          <n-text strong style="font-size: 20px" :style="{ color: cacheHitRate >= 50 ? '#18a058' : cacheHitRate > 0 ? '#f0a020' : undefined }">{{ cacheHitRateText }}</n-text>
+          <n-text v-if="provider.cached_tokens > 0" depth="3" style="font-size: 11px; display: block">缓存: {{ formatTokens(provider.cached_tokens) }}</n-text>
+        </div>
       </div>
 
       <div style="border: 1px solid var(--app-border); border-radius: 6px; padding: 12px">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
           <n-text strong>用量曲线</n-text>
           <div style="display: flex; gap: 14px; align-items: center">
-            <div style="display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; opacity: 1" @click="showPrompt = !showPrompt" :style="{ opacity: showPrompt ? 1 : 0.35 }">
+            <div style="display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none" @click="showPrompt = !showPrompt" :style="{ opacity: showPrompt ? 1 : 0.35 }">
               <span style="width: 10px; height: 10px; background: #18a058; border-radius: 2px"></span>
               <n-text depth="3" style="font-size: 12px">输入</n-text>
             </div>
-            <div style="display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; opacity: 1" @click="showCompletion = !showCompletion" :style="{ opacity: showCompletion ? 1 : 0.35 }">
+            <div style="display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none" @click="showCompletion = !showCompletion" :style="{ opacity: showCompletion ? 1 : 0.35 }">
               <span style="width: 10px; height: 10px; background: #f0a020; border-radius: 2px"></span>
               <n-text depth="3" style="font-size: 12px">输出</n-text>
             </div>
-            <div style="display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; opacity: 1" @click="showTotal = !showTotal" :style="{ opacity: showTotal ? 1 : 0.35 }">
+            <div style="display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none" @click="showTotal = !showTotal" :style="{ opacity: showTotal ? 1 : 0.35 }">
               <span style="width: 16px; height: 2px; background: #d03050; border-radius: 1px"></span>
               <n-text depth="3" style="font-size: 12px">总量</n-text>
             </div>
+
           </div>
         </div>
         <n-spin :show="loadingSeries">
@@ -449,6 +469,11 @@ function handleChartMouseLeave() {
                 <span class="chart-tooltip-dot" style="background: #d03050"></span>
                 <span>总量</span>
                 <span class="chart-tooltip-val">{{ formatTokens(chart.hitTargets[hoverIndex].total_tokens) }}</span>
+              </div>
+              <div class="chart-tooltip-row">
+                <span class="chart-tooltip-dot" style="background: #2080f0"></span>
+                <span>缓存</span>
+                <span class="chart-tooltip-val">{{ chart.hitTargets[hoverIndex].cached_tokens > 0 ? formatTokens(chart.hitTargets[hoverIndex].cached_tokens) + ' (' + chart.hitTargets[hoverIndex].cached_rate + '%)' : '--' }}</span>
               </div>
             </div>
           </div>

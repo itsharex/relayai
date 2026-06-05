@@ -182,9 +182,11 @@ onDeactivated(() => {
               <template #trigger>
                 <n-text depth="3" class="log-col log-tokens">
                   共{{ formatTokens(log.total_tokens) }}
+                  <n-text v-if="log.cached_tokens > 0" depth="3" style="font-size: 10px; color: #2080f0"> 缓{{ formatTokens(log.cached_tokens) }}</n-text>
                 </n-text>
               </template>
-              入{{ formatTokens(log.prompt_tokens) }} 出{{ formatTokens(log.completion_tokens) }} 共{{ formatTokens(log.total_tokens) }}
+              <div>入{{ formatTokens(log.prompt_tokens) }} 出{{ formatTokens(log.completion_tokens) }} 共{{ formatTokens(log.total_tokens) }}</div>
+              <div v-if="log.cached_tokens > 0" style="color: #2080f0">缓存命中: {{ formatTokens(log.cached_tokens) }} ({{ log.prompt_tokens > 0 ? Math.round(log.cached_tokens / log.prompt_tokens * 100) : 0 }}%)</div>
             </n-tooltip>
             <div v-else class="log-col log-tokens"></div>
           </div>

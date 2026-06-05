@@ -30,6 +30,7 @@ func TestGetProviderUsageSeries(t *testing.T) {
 			prompt_tokens INTEGER DEFAULT 0,
 			completion_tokens INTEGER DEFAULT 0,
 			total_tokens INTEGER DEFAULT 0,
+			cached_tokens INTEGER DEFAULT 0,
 			usage_updated_at INTEGER DEFAULT 0
 		);
 		CREATE TABLE request_logs (
@@ -47,6 +48,7 @@ func TestGetProviderUsageSeries(t *testing.T) {
 			prompt_tokens INTEGER DEFAULT 0,
 			completion_tokens INTEGER DEFAULT 0,
 			total_tokens INTEGER DEFAULT 0,
+			cached_tokens INTEGER DEFAULT 0,
 			error TEXT,
 			response_body TEXT
 		);
@@ -56,6 +58,7 @@ func TestGetProviderUsageSeries(t *testing.T) {
 			prompt_tokens INTEGER DEFAULT 0,
 			completion_tokens INTEGER DEFAULT 0,
 			total_tokens INTEGER DEFAULT 0,
+			cached_tokens INTEGER DEFAULT 0,
 			PRIMARY KEY (provider_id, bucket_start)
 		)
 	`)

@@ -26,6 +26,7 @@ type tryProviderResult struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
+	CachedTokens     int
 }
 
 // UnsupportedContentError indicates the request contains content types
@@ -233,11 +234,11 @@ func tryProvider(w http.ResponseWriter, r *http.Request, upstreamURL string, bod
 	defer upResp.Body.Close()
 
 	if isStream {
-		p, c, t, model := forwardStream(r.Context(), w, upResp, convertToResponses, sessions, requestModel, requestMessages, preResponseID, keepAliveDone, &writeMu)
+		p, c, t, cached, model := forwardStream(r.Context(), w, upResp, convertToResponses, sessions, requestModel, requestMessages, preResponseID, keepAliveDone, &writeMu)
 		if keepAliveDone != nil {
 			close(keepAliveDone)
 		}
-		return tryProviderResult{StatusCode: upResp.StatusCode, ResponseModel: model, PromptTokens: p, CompletionTokens: c, TotalTokens: t}
+		return tryProviderResult{StatusCode: upResp.StatusCode, ResponseModel: model, PromptTokens: p, CompletionTokens: c, TotalTokens: t, CachedTokens: cached}
 	}
 
 	respBody, readErr := io.ReadAll(upResp.Body)
@@ -288,10 +289,10 @@ func tryProvider(w http.ResponseWriter, r *http.Request, upstreamURL string, bod
 	if upResp.StatusCode >= 400 {
 		respBodyStr = sanitizeResponseBody(respBody)
 	}
-	p, c, t := extractTokenUsage(respBody)
+	p, c, t, cached := extractTokenUsage(respBody)
 	responseModel := extractResponseModel(respBody)
 
-	return tryProviderResult{StatusCode: upResp.StatusCode, ResponseBody: respBodyStr, ResponseModel: responseModel, PromptTokens: p, CompletionTokens: c, TotalTokens: t}
+	return tryProviderResult{StatusCode: upResp.StatusCode, ResponseBody: respBodyStr, ResponseModel: responseModel, PromptTokens: p, CompletionTokens: c, TotalTokens: t, CachedTokens: cached}
 }
 
 // extractResponseModel extracts the model field from a response body.
@@ -308,7 +309,7 @@ func extractResponseModel(body []byte) string {
 }
 
 // forwardStream forwards the upstream SSE response, optionally converting to Responses API format.
-func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Response, convert bool, sessions *SessionStore, requestModel string, requestMessages []map[string]any, preResponseID string, keepAliveDone chan struct{}, writeMu *sync.Mutex) (promptTokens, completionTokens, totalTokens int, responseModel string) {
+func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Response, convert bool, sessions *SessionStore, requestModel string, requestMessages []map[string]any, preResponseID string, keepAliveDone chan struct{}, writeMu *sync.Mutex) (promptTokens, completionTokens, totalTokens int, cachedTokens int, responseModel string) {
 	flusher, canFlush := w.(http.Flusher)
 
 	if convert {
@@ -326,15 +327,15 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 			}
 			convertedBody, _ := fromChatResponse(respBody, responseID, model, sessions)
 			p, c, t := synthesizeResponsesSSE(w, convertedBody, flusher, canFlush, model, sessions, preResponseID)
-			return p, c, t, ""
+			return p, c, t, 0, ""
 		}
 		// For streaming mode
 		model := requestModel
 		if model == "" {
 			model = "unknown"
 		}
-		p, c, t := translateStream(ctx, w, resp, flusher, canFlush, model, sessions, requestMessages, preResponseID, keepAliveDone, writeMu)
-		return p, c, t, ""
+		p, c, t, cached := translateStream(ctx, w, resp, flusher, canFlush, model, sessions, requestMessages, preResponseID, keepAliveDone, writeMu)
+		return p, c, t, cached, ""
 	}
 
 	// Passthrough mode
@@ -407,7 +408,7 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 	}()
 
 	// Track token usage and model from Anthropic streaming events
-	var streamPromptTokens, streamCompletionTokens int
+	var streamPromptTokens, streamCompletionTokens, streamCachedTokens int
 	var streamModel string
 	var currentEventType string
 
@@ -423,14 +424,16 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 		} else if after, ok := strings.CutPrefix(line, "data: "); ok {
 			switch currentEventType {
 			case "message_start":
-				// message_start contains message.model and message.usage.input_tokens
+				// message_start contains message.model and message.usage
 				var event struct {
 					Type    string `json:"type"`
 					Message struct {
 						Model string `json:"model"`
 						Usage struct {
-							InputTokens  int `json:"input_tokens"`
-							OutputTokens int `json:"output_tokens"`
+							InputTokens         int `json:"input_tokens"`
+							OutputTokens        int `json:"output_tokens"`
+							CacheReadTokens     int `json:"cache_read_input_tokens"`
+							CacheCreationTokens int `json:"cache_creation_input_tokens"`
 						} `json:"usage"`
 					} `json:"message"`
 				}
@@ -441,6 +444,10 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 					}
 					if event.Message.Usage.InputTokens > 0 {
 						streamPromptTokens = event.Message.Usage.InputTokens
+					}
+					if event.Message.Usage.CacheReadTokens > 0 {
+						streamCompletionTokens = 0 // reset, will be set by message_delta
+						streamCachedTokens = event.Message.Usage.CacheReadTokens
 					}
 				}
 			case "message_delta":
@@ -521,5 +528,5 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 	if canFlush {
 		flusher.Flush()
 	}
-	return streamPromptTokens, streamCompletionTokens, streamPromptTokens + streamCompletionTokens, streamModel
+	return streamPromptTokens, streamCompletionTokens, streamPromptTokens + streamCompletionTokens, streamCachedTokens, streamModel
 }

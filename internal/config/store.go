@@ -74,7 +74,7 @@ func (s *Store) GetProxyAuthToken() string {
 }
 
 func (s *Store) getProviders() []Provider {
-	rows, err := s.db.Query("SELECT id, name, base_url, api_key, auth_token, default_model, model_mappings, cli_types, chat_compat_mode, enabled, created_at, prompt_tokens, completion_tokens, total_tokens, usage_updated_at FROM providers ORDER BY created_at")
+	rows, err := s.db.Query("SELECT id, name, base_url, api_key, auth_token, default_model, model_mappings, cli_types, chat_compat_mode, enabled, created_at, prompt_tokens, completion_tokens, total_tokens, cached_tokens, usage_updated_at FROM providers ORDER BY created_at")
 	if err != nil {
 		return nil
 	}
@@ -136,7 +136,7 @@ func (s *Store) GetEnabledProviders() []Provider {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query("SELECT id, name, base_url, api_key, auth_token, default_model, model_mappings, cli_types, chat_compat_mode, enabled, created_at, prompt_tokens, completion_tokens, total_tokens, usage_updated_at FROM providers WHERE enabled = 1 ORDER BY created_at")
+	rows, err := s.db.Query("SELECT id, name, base_url, api_key, auth_token, default_model, model_mappings, cli_types, chat_compat_mode, enabled, created_at, prompt_tokens, completion_tokens, total_tokens, cached_tokens, usage_updated_at FROM providers WHERE enabled = 1 ORDER BY created_at")
 	if err != nil {
 		return nil
 	}
@@ -148,7 +148,7 @@ func (s *Store) GetProviderByAuthToken(token string) *Provider {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query("SELECT id, name, base_url, api_key, auth_token, default_model, model_mappings, cli_types, chat_compat_mode, enabled, created_at, prompt_tokens, completion_tokens, total_tokens, usage_updated_at FROM providers WHERE auth_token = ? AND enabled = 1", token)
+	rows, err := s.db.Query("SELECT id, name, base_url, api_key, auth_token, default_model, model_mappings, cli_types, chat_compat_mode, enabled, created_at, prompt_tokens, completion_tokens, total_tokens, cached_tokens, usage_updated_at FROM providers WHERE auth_token = ? AND enabled = 1", token)
 	if err != nil {
 		return nil
 	}
@@ -180,6 +180,7 @@ func scanProviders(rows *sql.Rows) []Provider {
 			&p.PromptTokens,
 			&p.CompletionTokens,
 			&p.TotalTokens,
+			&p.CachedTokens,
 			&p.UsageUpdatedAt,
 		)
 		if err != nil {

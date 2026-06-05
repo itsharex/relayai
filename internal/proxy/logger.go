@@ -28,6 +28,7 @@ type RequestLog struct {
 	PromptTokens     int    `json:"prompt_tokens"`
 	CompletionTokens int    `json:"completion_tokens"`
 	TotalTokens      int    `json:"total_tokens"`
+	CachedTokens     int    `json:"cached_tokens"`
 	Error            string `json:"error,omitempty"`
 	ResponseBody     string `json:"response_body,omitempty"`
 }
@@ -37,6 +38,7 @@ type ProviderUsagePoint struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
 	TotalTokens      int64 `json:"total_tokens"`
+	CachedTokens     int64 `json:"cached_tokens"`
 }
 
 type Logger struct {
@@ -100,8 +102,8 @@ func (l *Logger) Add(entry RequestLog) {
 	entry.Time = time.Now().UnixMilli()
 
 	_, err := l.db.Exec(
-		"INSERT INTO request_logs (id, time, method, path, upstream_url, cli_type, provider_id, provider, model, status_code, duration_ms, prompt_tokens, completion_tokens, total_tokens, error, response_body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		entry.ID, entry.Time, entry.Method, entry.Path, entry.UpstreamURL, entry.CLIType, entry.ProviderID, entry.Provider, entry.Model, entry.StatusCode, entry.Duration, entry.PromptTokens, entry.CompletionTokens, entry.TotalTokens, entry.Error, entry.ResponseBody,
+		"INSERT INTO request_logs (id, time, method, path, upstream_url, cli_type, provider_id, provider, model, status_code, duration_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, error, response_body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		entry.ID, entry.Time, entry.Method, entry.Path, entry.UpstreamURL, entry.CLIType, entry.ProviderID, entry.Provider, entry.Model, entry.StatusCode, entry.Duration, entry.PromptTokens, entry.CompletionTokens, entry.TotalTokens, entry.CachedTokens, entry.Error, entry.ResponseBody,
 	)
 	if err != nil {
 		slog.Error("failed to write request log", "error", err)
@@ -111,7 +113,7 @@ func (l *Logger) Add(entry RequestLog) {
 	go l.addProviderUsage(entry)
 }
 
-const logSelectColumns = `id, time, method, path, upstream_url, cli_type, provider_id, provider, model, status_code, duration_ms, prompt_tokens, completion_tokens, total_tokens, error, response_body`
+const logSelectColumns = `id, time, method, path, upstream_url, cli_type, provider_id, provider, model, status_code, duration_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, error, response_body`
 
 // scanLogs iterates sql.Rows and returns the scanned RequestLog slice.
 func scanLogs(rows *sql.Rows) []RequestLog {
@@ -119,7 +121,7 @@ func scanLogs(rows *sql.Rows) []RequestLog {
 	logs := make([]RequestLog, 0)
 	for rows.Next() {
 		var log RequestLog
-		if err := rows.Scan(&log.ID, &log.Time, &log.Method, &log.Path, &log.UpstreamURL, &log.CLIType, &log.ProviderID, &log.Provider, &log.Model, &log.StatusCode, &log.Duration, &log.PromptTokens, &log.CompletionTokens, &log.TotalTokens, &log.Error, &log.ResponseBody); err != nil {
+		if err := rows.Scan(&log.ID, &log.Time, &log.Method, &log.Path, &log.UpstreamURL, &log.CLIType, &log.ProviderID, &log.Provider, &log.Model, &log.StatusCode, &log.Duration, &log.PromptTokens, &log.CompletionTokens, &log.TotalTokens, &log.CachedTokens, &log.Error, &log.ResponseBody); err != nil {
 			continue
 		}
 		logs = append(logs, log)
@@ -163,7 +165,7 @@ func (l *Logger) GetProviderUsageSeries(providerID string) []ProviderUsagePoint 
 
 	cutoff := time.Now().Add(-usageRetention).UnixMilli()
 	rows, err := l.db.Query(`
-		SELECT bucket_start, prompt_tokens, completion_tokens, total_tokens
+		SELECT bucket_start, prompt_tokens, completion_tokens, total_tokens, cached_tokens
 		FROM provider_usage_points
 		WHERE provider_id = ? AND bucket_start > ?
 		ORDER BY bucket_start ASC`, providerID, cutoff)
@@ -175,7 +177,7 @@ func (l *Logger) GetProviderUsageSeries(providerID string) []ProviderUsagePoint 
 	points := make([]ProviderUsagePoint, 0)
 	for rows.Next() {
 		var point ProviderUsagePoint
-		if err := rows.Scan(&point.Time, &point.PromptTokens, &point.CompletionTokens, &point.TotalTokens); err != nil {
+		if err := rows.Scan(&point.Time, &point.PromptTokens, &point.CompletionTokens, &point.TotalTokens, &point.CachedTokens); err != nil {
 			continue
 		}
 		points = append(points, point)
@@ -196,9 +198,10 @@ func (l *Logger) addProviderUsage(entry RequestLog) {
 		SET prompt_tokens = COALESCE(prompt_tokens, 0) + ?,
 			completion_tokens = COALESCE(completion_tokens, 0) + ?,
 			total_tokens = COALESCE(total_tokens, 0) + ?,
+			cached_tokens = COALESCE(cached_tokens, 0) + ?,
 			usage_updated_at = ?
 		WHERE id = ?`,
-		entry.PromptTokens, entry.CompletionTokens, entry.TotalTokens, entry.Time, entry.ProviderID,
+		entry.PromptTokens, entry.CompletionTokens, entry.TotalTokens, entry.CachedTokens, entry.Time, entry.ProviderID,
 	)
 	if err != nil {
 		slog.Error("failed to update provider usage", "error", err)
@@ -206,13 +209,14 @@ func (l *Logger) addProviderUsage(entry RequestLog) {
 
 	bucketStart := entry.Time - entry.Time%int64(10*time.Minute/time.Millisecond)
 	_, err = l.db.Exec(
-		`INSERT INTO provider_usage_points (provider_id, bucket_start, prompt_tokens, completion_tokens, total_tokens)
-		VALUES (?, ?, ?, ?, ?)
+		`INSERT INTO provider_usage_points (provider_id, bucket_start, prompt_tokens, completion_tokens, total_tokens, cached_tokens)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(provider_id, bucket_start) DO UPDATE SET
 			prompt_tokens = prompt_tokens + excluded.prompt_tokens,
 			completion_tokens = completion_tokens + excluded.completion_tokens,
-			total_tokens = total_tokens + excluded.total_tokens`,
-		entry.ProviderID, bucketStart, entry.PromptTokens, entry.CompletionTokens, entry.TotalTokens,
+			total_tokens = total_tokens + excluded.total_tokens,
+			cached_tokens = cached_tokens + excluded.cached_tokens`,
+		entry.ProviderID, bucketStart, entry.PromptTokens, entry.CompletionTokens, entry.TotalTokens, entry.CachedTokens,
 	)
 	if err != nil {
 		slog.Error("failed to update provider usage series", "error", err)

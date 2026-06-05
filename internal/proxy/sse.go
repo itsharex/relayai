@@ -84,7 +84,7 @@ func isRetryableNetError(err error) bool {
 }
 
 // translateStream converts an upstream Chat Completions SSE stream into Responses API SSE.
-func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Response, flusher http.Flusher, canFlush bool, requestModel string, sessions *SessionStore, requestMessages []map[string]any, preResponseID string, keepAliveDone chan struct{}, writeMu *sync.Mutex) (promptTokens, completionTokens, totalTokens int) {
+func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Response, flusher http.Flusher, canFlush bool, requestModel string, sessions *SessionStore, requestMessages []map[string]any, preResponseID string, keepAliveDone chan struct{}, writeMu *sync.Mutex) (promptTokens, completionTokens, totalTokens, cachedTokens int) {
 	responseID := preResponseID
 	if responseID == "" {
 		responseID = sessions.NewID()
@@ -157,7 +157,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 		streamDone           bool
 		streamFinishReason   string
 		streamUsage          struct {
-			prompt, completion, total int
+			prompt, completion, total, cached int
 		}
 	)
 
@@ -240,6 +240,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 				PromptTokens     int `json:"prompt_tokens"`
 				CompletionTokens int `json:"completion_tokens"`
 				TotalTokens      int `json:"total_tokens"`
+				CachedTokens     int `json:"cached_tokens"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
@@ -251,6 +252,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 				streamUsage.prompt = chunk.Usage.PromptTokens
 				streamUsage.completion = chunk.Usage.CompletionTokens
 				streamUsage.total = chunk.Usage.TotalTokens
+				streamUsage.cached = chunk.Usage.CachedTokens
 			}
 			continue
 		}
@@ -258,6 +260,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 			streamUsage.prompt = chunk.Usage.PromptTokens
 			streamUsage.completion = chunk.Usage.CompletionTokens
 			streamUsage.total = chunk.Usage.TotalTokens
+			streamUsage.cached = chunk.Usage.CachedTokens
 		}
 
 		choice := chunk.Choices[0]
@@ -606,7 +609,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 		flusher.Flush()
 	}
 
-	return streamUsage.prompt, streamUsage.completion, streamUsage.total
+	return streamUsage.prompt, streamUsage.completion, streamUsage.total, streamUsage.cached
 }
 
 func synthesizeResponsesSSE(w http.ResponseWriter, respBody []byte, flusher http.Flusher, canFlush bool, requestModel string, sessions *SessionStore, preResponseID string) (promptTokens, completionTokens, totalTokens int) {

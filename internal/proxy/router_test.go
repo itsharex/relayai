@@ -673,7 +673,7 @@ func TestConvertStreamSSE_PureText(t *testing.T) {
 	}
 	resp := buildSSEResponse(chunks)
 	rec := httptest.NewRecorder()
-	p, c, total := translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex))
+	p, c, total, _ := translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex))
 
 	_ = p
 	_ = c
@@ -844,7 +844,7 @@ func TestConvertStreamSSE_EmptyStream(t *testing.T) {
 	}
 	resp := buildSSEResponse(chunks)
 	rec := httptest.NewRecorder()
-	p, c, total := translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex))
+	p, c, total, _ := translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex))
 
 	if p != 0 || c != 0 || total != 0 {
 		t.Errorf("expected zero tokens for empty stream, got p=%d c=%d t=%d", p, c, total)

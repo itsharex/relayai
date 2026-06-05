@@ -23,10 +23,11 @@ export interface Provider {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
+  cached_tokens: number
   usage_updated_at: number
 }
 
-type ProviderPayload = Omit<Provider, 'id' | 'created_at' | 'enabled' | 'prompt_tokens' | 'completion_tokens' | 'total_tokens' | 'usage_updated_at' >
+type ProviderPayload = Omit<Provider, 'id' | 'created_at' | 'enabled' | 'prompt_tokens' | 'completion_tokens' | 'total_tokens' | 'cached_tokens' | 'usage_updated_at' >
 
 export interface ProxyStatus {
   running: boolean
@@ -48,6 +49,7 @@ export interface RequestLog {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
+  cached_tokens: number
   error?: string
   response_body?: string
 }
@@ -57,6 +59,7 @@ export interface ProviderUsagePoint {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
+  cached_tokens: number
 }
 
 export interface CLITypeMeta {

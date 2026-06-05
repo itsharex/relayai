@@ -169,6 +169,35 @@ func makeHandler(store *config.Store, logger *Logger, sessions *SessionStore, cl
 					logModel = result.ResponseModel
 				}
 
+				// Log cache hit rate
+				var cacheHitRate float64
+				if result.PromptTokens > 0 && result.CachedTokens > 0 {
+					cacheHitRate = float64(result.CachedTokens) / float64(result.PromptTokens) * 100
+				}
+				if result.CachedTokens > 0 {
+					slog.Info("request completed",
+						"cli", cliType,
+						"provider", provider.Name,
+						"model", logModel,
+						"status", result.StatusCode,
+						"duration_ms", time.Since(start).Milliseconds(),
+						"prompt_tokens", result.PromptTokens,
+						"completion_tokens", result.CompletionTokens,
+						"cached_tokens", result.CachedTokens,
+						"cache_hit_rate", fmt.Sprintf("%.1f%%", cacheHitRate),
+					)
+				} else {
+					slog.Debug("request completed",
+						"cli", cliType,
+						"provider", provider.Name,
+						"model", logModel,
+						"status", result.StatusCode,
+						"duration_ms", time.Since(start).Milliseconds(),
+						"prompt_tokens", result.PromptTokens,
+						"completion_tokens", result.CompletionTokens,
+					)
+				}
+
 				logger.Add(RequestLog{
 					Method:           r.Method,
 					Path:             upstreamURL,
@@ -183,6 +212,7 @@ func makeHandler(store *config.Store, logger *Logger, sessions *SessionStore, cl
 					PromptTokens:     result.PromptTokens,
 					CompletionTokens: result.CompletionTokens,
 					TotalTokens:      result.TotalTokens,
+					CachedTokens:     result.CachedTokens,
 				})
 				return
 			}
@@ -279,30 +309,35 @@ func extractBearerToken(r *http.Request) string {
 	return auth
 }
 
-func extractTokenUsage(body []byte) (int, int, int) {
+func extractTokenUsage(body []byte) (prompt, completion, total, cached int) {
 	if len(body) == 0 {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
+	// OpenAI format: cached_tokens at top level of usage
 	var openai struct {
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 			TotalTokens      int `json:"total_tokens"`
+			CachedTokens     int `json:"cached_tokens"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(body, &openai) == nil && openai.Usage.TotalTokens > 0 {
-		return openai.Usage.PromptTokens, openai.Usage.CompletionTokens, openai.Usage.TotalTokens
+		return openai.Usage.PromptTokens, openai.Usage.CompletionTokens, openai.Usage.TotalTokens, openai.Usage.CachedTokens
 	}
+	// Anthropic format: cache_read_input_tokens
 	var anthropic struct {
 		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens         int `json:"input_tokens"`
+			OutputTokens        int `json:"output_tokens"`
+			CacheReadTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(body, &anthropic) == nil && anthropic.Usage.InputTokens > 0 {
-		return anthropic.Usage.InputTokens, anthropic.Usage.OutputTokens, anthropic.Usage.InputTokens + anthropic.Usage.OutputTokens
+		return anthropic.Usage.InputTokens, anthropic.Usage.OutputTokens, anthropic.Usage.InputTokens + anthropic.Usage.OutputTokens, anthropic.Usage.CacheReadTokens
 	}
-	return 0, 0, 0
+	return 0, 0, 0, 0
 }
 
 func sanitizeResponseBody(body []byte) string {
