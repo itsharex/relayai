@@ -344,7 +344,7 @@ func extractTokenUsage(body []byte) (prompt, completion, total, cached int) {
 		} `json:"usage"`
 	}
 	if json.Unmarshal(body, &anthropic) == nil && anthropic.Usage.InputTokens > 0 {
-		return anthropic.Usage.InputTokens, anthropic.Usage.OutputTokens, anthropic.Usage.InputTokens + anthropic.Usage.OutputTokens, anthropic.Usage.CacheReadTokens
+		return anthropic.Usage.InputTokens + anthropic.Usage.CacheReadTokens, anthropic.Usage.OutputTokens, anthropic.Usage.InputTokens + anthropic.Usage.CacheReadTokens + anthropic.Usage.OutputTokens, anthropic.Usage.CacheReadTokens
 	}
 	return 0, 0, 0, 0
 }

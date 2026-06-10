@@ -530,6 +530,9 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 					if event.Message.Usage.CacheReadTokens > 0 {
 						streamCompletionTokens = 0 // reset, will be set by message_delta
 						streamCachedTokens = event.Message.Usage.CacheReadTokens
+						// Anthropic's input_tokens does NOT include cached tokens;
+						// add them so prompt_tokens represents total input (matches OpenAI convention).
+						streamPromptTokens += event.Message.Usage.CacheReadTokens
 					}
 				}
 			case "message_delta":

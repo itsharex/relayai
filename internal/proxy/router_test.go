@@ -976,14 +976,15 @@ func TestExtractTokenUsage_Anthropic_WithCache(t *testing.T) {
 		}
 	}`)
 	prompt, completion, total, cached := extractTokenUsage(body)
-	if prompt != 10000 {
-		t.Errorf("expected prompt=10000, got %d", prompt)
+	// Anthropic: prompt = input_tokens + cache_read_input_tokens (total input consumed)
+	if prompt != 17000 {
+		t.Errorf("expected prompt=17000, got %d", prompt)
 	}
 	if completion != 500 {
 		t.Errorf("expected completion=500, got %d", completion)
 	}
-	if total != 10500 {
-		t.Errorf("expected total=10500, got %d", total)
+	if total != 17500 {
+		t.Errorf("expected total=17500, got %d", total)
 	}
 	if cached != 7000 {
 		t.Errorf("expected cached=7000, got %d", cached)
