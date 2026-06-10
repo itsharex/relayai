@@ -27,6 +27,7 @@ type tryProviderResult struct {
 	CompletionTokens int
 	TotalTokens      int
 	CachedTokens     int
+	FinishReason     string
 }
 
 // UnsupportedContentError indicates the request contains content types
@@ -160,9 +161,11 @@ func tryProvider(w http.ResponseWriter, r *http.Request, upstreamURL string, bod
 	// Matches codex-relay: Sse::new(event_stream).keep_alive(KeepAlive::default()) wraps the entire stream
 	// including the upstream request wait time.
 	var preResponseID string
+	var msgItemID string
 	var keepAliveDone chan struct{}
 	if isStream && convertToResponses {
 		preResponseID = sessions.NewID()
+		msgItemID = fmt.Sprintf("msg_%d", time.Now().UnixNano())
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -234,11 +237,90 @@ func tryProvider(w http.ResponseWriter, r *http.Request, upstreamURL string, bod
 	defer upResp.Body.Close()
 
 	if isStream {
-		p, c, t, cached, model := forwardStream(r.Context(), w, upResp, convertToResponses, sessions, requestModel, requestMessages, preResponseID, keepAliveDone, &writeMu)
-		if keepAliveDone != nil {
-			close(keepAliveDone)
+		p, c, t, cached, model, finishReason, accText := forwardStream(r.Context(), w, upResp, convertToResponses, sessions, requestModel, requestMessages, preResponseID, keepAliveDone, &writeMu, false, msgItemID)
+
+		// Auto-continue loop: when finish_reason == "length" in chat-compat mode,
+		// the model was truncated by max_output_tokens. Build a continuation request
+		// with the accumulated assistant text appended and re-call upstream.
+		keepAliveClosed := false
+		for continueAttempt := 0; continueAttempt < maxContinueAttempts && finishReason == "length" && convertToResponses; continueAttempt++ {
+			// Check if client disconnected before each continuation
+			if r.Context().Err() != nil {
+				slog.Info("auto-continue: client disconnected, stopping", "attempt", continueAttempt)
+				break
+			}
+			slog.Info("auto-continue triggered",
+				"attempt", continueAttempt+1,
+				"max", maxContinueAttempts,
+				"model", model,
+				"accumulated_len", len(accText),
+			)
+
+			// Build continuation body: original Chat Completions messages + assistant reply
+			continueBody, cbErr := buildContinueBody(body, accText)
+			if cbErr != nil {
+				slog.Error("auto-continue: failed to build continuation body", "error", cbErr)
+				break
+			}
+
+			// Make new upstream request with the continuation body
+			contReq, crErr := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(continueBody))
+			if crErr != nil {
+				slog.Error("auto-continue: failed to create request", "error", crErr)
+				break
+			}
+			contReq.Header = req.Header.Clone()
+			contReq.Header.Set("Authorization", "Bearer "+provider.APIKey)
+			contReq.Header.Set("Accept", "text/event-stream")
+
+			var contResp *http.Response
+			for attempt := 0; attempt <= upstreamMaxRetries; attempt++ {
+				if attempt > 0 {
+					contReq.Body = io.NopCloser(bytes.NewReader(continueBody))
+					contReq.ContentLength = int64(len(continueBody))
+					delay := upstreamRetryBaseDelay * (1 << (attempt - 1))
+					select {
+					case <-r.Context().Done():
+						break
+					case <-time.After(delay):
+					}
+				}
+				contResp, crErr = client.Do(contReq)
+				if crErr == nil {
+					break
+				}
+				if !isRetryableNetError(crErr) || attempt == upstreamMaxRetries {
+					slog.Error("auto-continue: upstream request failed", "attempt", attempt+1, "error", crErr)
+					break
+				}
+			}
+			if crErr != nil || contResp == nil {
+				break
+			}
+
+			// Continue streaming: isContinuation=true skips response.created and output_item.added
+			cp, cc, ct, cch, _, cReason, cText := forwardStream(r.Context(), w, contResp, convertToResponses, sessions, model, requestMessages, preResponseID, keepAliveDone, &writeMu, true, msgItemID)
+			contResp.Body.Close()
+			p += cp
+			c += cc
+			t += ct
+			cached += cch
+			accText += cText
+			finishReason = cReason
 		}
-		return tryProviderResult{StatusCode: upResp.StatusCode, ResponseModel: model, PromptTokens: p, CompletionTokens: c, TotalTokens: t, CachedTokens: cached}
+
+		// After continuation loop ends (or was skipped), emit final completion events.
+		// forwardStream with isContinuation=true skipped output_item.done and response.completed,
+		// so we emit them here with the full accumulated text and final usage.
+		if convertToResponses && r.Context().Err() == nil {
+			emitFinalCompletionEvents(w, preResponseID, model, sessions, accText, p, c, t, finishReason, &writeMu, msgItemID)
+		}
+
+		if keepAliveDone != nil && !keepAliveClosed {
+			close(keepAliveDone)
+			keepAliveClosed = true
+		}
+		return tryProviderResult{StatusCode: upResp.StatusCode, ResponseModel: model, PromptTokens: p, CompletionTokens: c, TotalTokens: t, CachedTokens: cached, FinishReason: finishReason}
 	}
 
 	respBody, readErr := io.ReadAll(upResp.Body)
@@ -309,7 +391,7 @@ func extractResponseModel(body []byte) string {
 }
 
 // forwardStream forwards the upstream SSE response, optionally converting to Responses API format.
-func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Response, convert bool, sessions *SessionStore, requestModel string, requestMessages []map[string]any, preResponseID string, keepAliveDone chan struct{}, writeMu *sync.Mutex) (promptTokens, completionTokens, totalTokens int, cachedTokens int, responseModel string) {
+func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Response, convert bool, sessions *SessionStore, requestModel string, requestMessages []map[string]any, preResponseID string, keepAliveDone chan struct{}, writeMu *sync.Mutex, isContinuation bool, msgItemID string) (promptTokens, completionTokens, totalTokens int, cachedTokens int, responseModel string, finishReason string, accumulatedText string) {
 	flusher, canFlush := w.(http.Flusher)
 
 	if convert {
@@ -327,15 +409,15 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 			}
 			convertedBody, _ := fromChatResponse(respBody, responseID, model, sessions)
 			p, c, t := synthesizeResponsesSSE(w, convertedBody, flusher, canFlush, model, sessions, preResponseID)
-			return p, c, t, 0, ""
+			return p, c, t, 0, "", "", ""
 		}
 		// For streaming mode
 		model := requestModel
 		if model == "" {
 			model = "unknown"
 		}
-		p, c, t, cached := translateStream(ctx, w, resp, flusher, canFlush, model, sessions, requestMessages, preResponseID, keepAliveDone, writeMu)
-		return p, c, t, cached, ""
+		p, c, t, cached, reason, text := translateStream(ctx, w, resp, flusher, canFlush, model, sessions, requestMessages, preResponseID, keepAliveDone, writeMu, isContinuation, msgItemID)
+		return p, c, t, cached, "", reason, text
 	}
 
 	// Passthrough mode
@@ -528,5 +610,110 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 	if canFlush {
 		flusher.Flush()
 	}
-	return streamPromptTokens, streamCompletionTokens, streamPromptTokens + streamCompletionTokens, streamCachedTokens, streamModel
+	return streamPromptTokens, streamCompletionTokens, streamPromptTokens + streamCompletionTokens, streamCachedTokens, streamModel, "", ""
+}
+
+// buildContinueBody constructs a continuation Chat Completions request body.
+// It appends the accumulated assistant text to the original messages so the model
+// can resume generation from where it was truncated.
+func buildContinueBody(originalBody []byte, accumulatedText string) ([]byte, error) {
+	var m map[string]any
+	if err := json.Unmarshal(originalBody, &m); err != nil {
+		return nil, fmt.Errorf("failed to parse original body: %w", err)
+	}
+
+	// Get existing messages
+	messages, ok := m["messages"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("no messages array in body")
+	}
+
+	// Append assistant message with the accumulated (truncated) text
+	messages = append(messages, map[string]any{
+		"role":    "assistant",
+		"content": accumulatedText,
+	})
+
+	m["messages"] = messages
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal continuation body: %w", err)
+	}
+	return out, nil
+}
+
+// emitFinalCompletionEvents writes the Responses API SSE completion events
+// (response.output_item.done + response.completed) after the auto-continue loop.
+// This is the counterpart of translateStream's finalization when isContinuation=true
+// caused it to skip those events.
+func emitFinalCompletionEvents(w http.ResponseWriter, responseID, requestModel string, sessions *SessionStore, accumulatedText string, promptTokens, completionTokens, totalTokens int, finishReason string, writeMu *sync.Mutex, msgItemID string) {
+
+	writeSSEEvent := func(eventType string, data any) {
+		jsonData, _ := jsonMarshalSafe(data)
+		writeMu.Lock()
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, jsonData); err != nil {
+			writeMu.Unlock()
+			slog.Error("final completion event write error", "event", eventType, "error", err)
+			return
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		writeMu.Unlock()
+	}
+
+	// response.output_item.done with the full accumulated text
+	writeSSEEvent("response.output_item.done", map[string]any{
+		"output_index": 0,
+		"item": map[string]any{
+			"type":   "message",
+			"id":     msgItemID,
+			"role":   "assistant",
+			"status": "completed",
+			"content": []map[string]any{
+				{"type": "output_text", "text": accumulatedText},
+			},
+		},
+	})
+
+	// response.completed
+	status := "completed"
+	if finishReason == "length" || finishReason == "content_filter" {
+		status = "incomplete"
+	}
+	completedResp := map[string]any{
+		"id":     responseID,
+		"status": status,
+		"model":  requestModel,
+		"output": []any{
+			map[string]any{
+				"type":   "message",
+				"id":     msgItemID,
+				"role":   "assistant",
+				"status": "completed",
+				"content": []map[string]any{
+					{"type": "output_text", "text": accumulatedText},
+				},
+			},
+		},
+		"usage": map[string]any{
+			"input_tokens":  promptTokens,
+			"output_tokens": completionTokens,
+			"total_tokens":  totalTokens,
+		},
+	}
+	if status == "incomplete" {
+		completedResp["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+	}
+	writeSSEEvent("response.completed", map[string]any{
+		"response": completedResp,
+	})
+
+	slog.Info("final completion events emitted",
+		"model", requestModel,
+		"status", status,
+		"accumulated_len", len(accumulatedText),
+		"prompt_tokens", promptTokens,
+		"completion_tokens", completionTokens,
+	)
 }

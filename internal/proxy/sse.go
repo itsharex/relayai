@@ -28,6 +28,10 @@ const (
 	upstreamMaxRetries = 3
 	// upstreamRetryBaseDelay is the base delay for exponential backoff on retry.
 	upstreamRetryBaseDelay = 1 * time.Second
+
+	// maxContinueAttempts is the maximum number of auto-continue retries
+	// when the upstream model hits max_output_tokens (finish_reason == "length").
+	maxContinueAttempts = 3
 )
 
 // sharedUpstreamTransport is a shared http.Transport with optimized settings for SSE streaming.
@@ -84,13 +88,15 @@ func isRetryableNetError(err error) bool {
 }
 
 // translateStream converts an upstream Chat Completions SSE stream into Responses API SSE.
-func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Response, flusher http.Flusher, canFlush bool, requestModel string, sessions *SessionStore, requestMessages []map[string]any, preResponseID string, keepAliveDone chan struct{}, writeMu *sync.Mutex) (promptTokens, completionTokens, totalTokens, cachedTokens int) {
+func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Response, flusher http.Flusher, canFlush bool, requestModel string, sessions *SessionStore, requestMessages []map[string]any, preResponseID string, keepAliveDone chan struct{}, writeMu *sync.Mutex, isContinuation bool, msgItemID string) (promptTokens, completionTokens, totalTokens, cachedTokens int, finishReason string, accumulatedTextOut string) {
 	responseID := preResponseID
 	if responseID == "" {
 		responseID = sessions.NewID()
 	}
-	// msg_item_id uses an independent id, matching codex-relay (separate UUID)
-	msgItemID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
+	// msg_item_id: reuse existing ID for continuation, or generate a new one
+	if msgItemID == "" {
+		msgItemID = fmt.Sprintf("msg_%d", time.Now().UnixNano())
+	}
 
 	// Ensure we have a flusher for SSE streaming
 	if flusher == nil {
@@ -138,8 +144,8 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 		writeMu.Unlock()
 	}
 
-	// Emit response.created if not already sent before upstream request
-	if preResponseID == "" {
+	// Emit response.created if not already sent before upstream request (skip for continuation)
+	if preResponseID == "" && !isContinuation {
 		writeEvent("response.created", map[string]any{
 			"response": map[string]any{
 				"id":     responseID,
@@ -237,10 +243,12 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage *struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
-				TotalTokens      int `json:"total_tokens"`
-				CachedTokens     int `json:"cached_tokens"`
+				PromptTokens        int `json:"prompt_tokens"`
+				CompletionTokens    int `json:"completion_tokens"`
+				TotalTokens         int `json:"total_tokens"`
+				PromptTokensDetails struct {
+					CachedTokens int `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
@@ -252,7 +260,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 				streamUsage.prompt = chunk.Usage.PromptTokens
 				streamUsage.completion = chunk.Usage.CompletionTokens
 				streamUsage.total = chunk.Usage.TotalTokens
-				streamUsage.cached = chunk.Usage.CachedTokens
+				streamUsage.cached = chunk.Usage.PromptTokensDetails.CachedTokens
 			}
 			continue
 		}
@@ -260,7 +268,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 			streamUsage.prompt = chunk.Usage.PromptTokens
 			streamUsage.completion = chunk.Usage.CompletionTokens
 			streamUsage.total = chunk.Usage.TotalTokens
-			streamUsage.cached = chunk.Usage.CachedTokens
+			streamUsage.cached = chunk.Usage.PromptTokensDetails.CachedTokens
 		}
 
 		choice := chunk.Choices[0]
@@ -278,7 +286,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 		// Text content delta
 		content := choice.Delta.Content
 		if content != nil && *content != "" {
-			if !emittedMessageItem {
+			if !emittedMessageItem && !isContinuation {
 				writeEvent("response.output_item.added", map[string]any{
 					"output_index": 0,
 					"item": map[string]any{
@@ -289,6 +297,8 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 						"content": []any{},
 					},
 				})
+			}
+			if !emittedMessageItem {
 				emittedMessageItem = true
 			}
 			accumulatedText.WriteString(*content)
@@ -398,8 +408,8 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 		return
 	}
 
-	// Message output_item.done
-	if emittedMessageItem {
+	// Message output_item.done — skip if we will auto-continue (caller emits final events)
+	if emittedMessageItem && streamFinishReason != "length" {
 		writeEvent("response.output_item.done", map[string]any{
 			"output_index": 0,
 			"item": map[string]any{
@@ -601,15 +611,17 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 	if status == "incomplete" {
 		completedEventResp["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
 	}
-	writeEvent("response.completed", map[string]any{
-		"response": completedEventResp,
-	})
-
-	if canFlush {
-		flusher.Flush()
+	// Skip response.completed if we will auto-continue (caller emits final events)
+	if streamFinishReason != "length" {
+		writeEvent("response.completed", map[string]any{
+			"response": completedEventResp,
+		})
+		if canFlush {
+			flusher.Flush()
+		}
 	}
 
-	return streamUsage.prompt, streamUsage.completion, streamUsage.total, streamUsage.cached
+	return streamUsage.prompt, streamUsage.completion, streamUsage.total, streamUsage.cached, streamFinishReason, accumulatedText.String()
 }
 
 func synthesizeResponsesSSE(w http.ResponseWriter, respBody []byte, flusher http.Flusher, canFlush bool, requestModel string, sessions *SessionStore, preResponseID string) (promptTokens, completionTokens, totalTokens int) {

@@ -673,7 +673,7 @@ func TestConvertStreamSSE_PureText(t *testing.T) {
 	}
 	resp := buildSSEResponse(chunks)
 	rec := httptest.NewRecorder()
-	p, c, total, _ := translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex))
+	p, c, total, _, _, _ := translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex), false, "")
 
 	_ = p
 	_ = c
@@ -719,7 +719,7 @@ func TestConvertStreamSSE_Reasoning(t *testing.T) {
 	}
 	resp := buildSSEResponse(chunks)
 	rec := httptest.NewRecorder()
-	translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex))
+	translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex), false, "")
 
 	events := captureSSEOutput(rec)
 	hasReasoningDelta := false
@@ -756,7 +756,7 @@ func TestConvertStreamSSE_ToolCalls(t *testing.T) {
 	}
 	resp := buildSSEResponse(chunks)
 	rec := httptest.NewRecorder()
-	translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex))
+	translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex), false, "")
 
 	events := captureSSEOutput(rec)
 	hasFuncCall := false
@@ -777,20 +777,36 @@ func TestConvertStreamSSE_Incomplete(t *testing.T) {
 	}
 	resp := buildSSEResponse(chunks)
 	rec := httptest.NewRecorder()
-	translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex))
+	_, _, _, _, finishReason, accText := translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex), false, "")
 
+	// translateStream should return finishReason="length" and skip response.completed
+	if finishReason != "length" {
+		t.Errorf("expected finishReason=length, got %q", finishReason)
+	}
+	if accText != "partial..." {
+		t.Errorf("expected accumulatedText=partial..., got %q", accText)
+	}
+
+	// response.completed should NOT be in the output
 	events := captureSSEOutput(rec)
-	hasIncomplete := false
 	for _, evt := range events {
-		if strings.Contains(evt, "incomplete_details") {
-			hasIncomplete = true
+		if strings.Contains(evt, "response.completed") {
+			t.Error("response.completed should be skipped when finishReason=length")
 		}
-		if strings.Contains(evt, "\"status\":\"incomplete\"") {
+	}
+
+	// Test emitFinalCompletionEvents produces the incomplete status
+	finalRec := httptest.NewRecorder()
+	emitFinalCompletionEvents(finalRec, "resp_test", "gpt-4o", nil, "partial...", 10, 3, 13, "length", new(sync.Mutex), "msg_test")
+	finalEvents := captureSSEOutput(finalRec)
+	hasIncomplete := false
+	for _, evt := range finalEvents {
+		if strings.Contains(evt, "incomplete_details") || strings.Contains(evt, `"status":"incomplete"`) {
 			hasIncomplete = true
 		}
 	}
 	if !hasIncomplete {
-		t.Error("missing incomplete status/details in completed event")
+		t.Error("emitFinalCompletionEvents should emit incomplete status/details")
 	}
 }
 
@@ -806,7 +822,7 @@ func TestConvertStreamSSE_ReasoningOnly(t *testing.T) {
 	}
 	resp := buildSSEResponse(chunks)
 	rec := httptest.NewRecorder()
-	translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex))
+	translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex), false, "")
 
 	events := captureSSEOutput(rec)
 
@@ -844,7 +860,7 @@ func TestConvertStreamSSE_EmptyStream(t *testing.T) {
 	}
 	resp := buildSSEResponse(chunks)
 	rec := httptest.NewRecorder()
-	p, c, total, _ := translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex))
+	p, c, total, _, _, _ := translateStream(context.Background(), rec, resp, rec, true, "gpt-4o", NewSessionStore(), nil, "", nil, new(sync.Mutex), false, "")
 
 	if p != 0 || c != 0 || total != 0 {
 		t.Errorf("expected zero tokens for empty stream, got p=%d c=%d t=%d", p, c, total)
@@ -895,5 +911,98 @@ func TestEnsureStreamOptions_NonStream(t *testing.T) {
 	result := ensureStreamOptions(body)
 	if len(result) != len(body) {
 		t.Error("expected no change for non-stream request")
+	}
+}
+
+func TestExtractTokenUsage_OpenAIChatCompletions_WithCache(t *testing.T) {
+	body := []byte(`{
+		"usage": {
+			"prompt_tokens": 10000,
+			"completion_tokens": 500,
+			"total_tokens": 10500,
+			"prompt_tokens_details": {
+				"cached_tokens": 8000
+			}
+		}
+	}`)
+	prompt, completion, total, cached := extractTokenUsage(body)
+	if prompt != 10000 {
+		t.Errorf("expected prompt=10000, got %d", prompt)
+	}
+	if completion != 500 {
+		t.Errorf("expected completion=500, got %d", completion)
+	}
+	if total != 10500 {
+		t.Errorf("expected total=10500, got %d", total)
+	}
+	if cached != 8000 {
+		t.Errorf("expected cached=8000, got %d", cached)
+	}
+}
+
+func TestExtractTokenUsage_OpenAIResponsesAPI_WithCache(t *testing.T) {
+	body := []byte(`{
+		"usage": {
+			"input_tokens": 10000,
+			"output_tokens": 500,
+			"total_tokens": 10500,
+			"input_tokens_details": {
+				"cached_tokens": 8000
+			}
+		}
+	}`)
+	prompt, completion, total, cached := extractTokenUsage(body)
+	if prompt != 10000 {
+		t.Errorf("expected prompt=10000, got %d", prompt)
+	}
+	if completion != 500 {
+		t.Errorf("expected completion=500, got %d", completion)
+	}
+	if total != 10500 {
+		t.Errorf("expected total=10500, got %d", total)
+	}
+	if cached != 8000 {
+		t.Errorf("expected cached=8000, got %d", cached)
+	}
+}
+
+func TestExtractTokenUsage_Anthropic_WithCache(t *testing.T) {
+	body := []byte(`{
+		"usage": {
+			"input_tokens": 10000,
+			"output_tokens": 500,
+			"cache_read_input_tokens": 7000,
+			"cache_creation_input_tokens": 2000
+		}
+	}`)
+	prompt, completion, total, cached := extractTokenUsage(body)
+	if prompt != 10000 {
+		t.Errorf("expected prompt=10000, got %d", prompt)
+	}
+	if completion != 500 {
+		t.Errorf("expected completion=500, got %d", completion)
+	}
+	if total != 10500 {
+		t.Errorf("expected total=10500, got %d", total)
+	}
+	if cached != 7000 {
+		t.Errorf("expected cached=7000, got %d", cached)
+	}
+}
+
+func TestExtractTokenUsage_OpenAIChatCompletions_NoCache(t *testing.T) {
+	body := []byte(`{
+		"usage": {
+			"prompt_tokens": 5000,
+			"completion_tokens": 300,
+			"total_tokens": 5300
+		}
+	}`)
+	_, _, total, cached := extractTokenUsage(body)
+	if total != 5300 {
+		t.Errorf("expected total=5300, got %d", total)
+	}
+	if cached != 0 {
+		t.Errorf("expected cached=0, got %d", cached)
 	}
 }

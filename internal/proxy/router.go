@@ -170,33 +170,26 @@ func makeHandler(store *config.Store, logger *Logger, sessions *SessionStore, cl
 				}
 
 				// Log cache hit rate
-				var cacheHitRate float64
-				if result.PromptTokens > 0 && result.CachedTokens > 0 {
-					cacheHitRate = float64(result.CachedTokens) / float64(result.PromptTokens) * 100
+				logLevel := slog.LevelDebug
+				logArgs := []any{
+					"cli", cliType,
+					"provider", provider.Name,
+					"model", logModel,
+					"status", result.StatusCode,
+					"duration_ms", time.Since(start).Milliseconds(),
+					"prompt_tokens", result.PromptTokens,
+					"completion_tokens", result.CompletionTokens,
+					"cached_tokens", result.CachedTokens,
 				}
 				if result.CachedTokens > 0 {
-					slog.Info("request completed",
-						"cli", cliType,
-						"provider", provider.Name,
-						"model", logModel,
-						"status", result.StatusCode,
-						"duration_ms", time.Since(start).Milliseconds(),
-						"prompt_tokens", result.PromptTokens,
-						"completion_tokens", result.CompletionTokens,
-						"cached_tokens", result.CachedTokens,
-						"cache_hit_rate", fmt.Sprintf("%.1f%%", cacheHitRate),
-					)
-				} else {
-					slog.Debug("request completed",
-						"cli", cliType,
-						"provider", provider.Name,
-						"model", logModel,
-						"status", result.StatusCode,
-						"duration_ms", time.Since(start).Milliseconds(),
-						"prompt_tokens", result.PromptTokens,
-						"completion_tokens", result.CompletionTokens,
-					)
+					logLevel = slog.LevelInfo
+					var cacheHitRate float64
+					if result.PromptTokens > 0 {
+						cacheHitRate = float64(result.CachedTokens) / float64(result.PromptTokens) * 100
+					}
+					logArgs = append(logArgs, "cache_hit_rate", fmt.Sprintf("%.1f%%", cacheHitRate))
 				}
+				slog.Log(r.Context(), logLevel, "request completed", logArgs...)
 
 				logger.Add(RequestLog{
 					Method:           r.Method,
@@ -313,17 +306,33 @@ func extractTokenUsage(body []byte) (prompt, completion, total, cached int) {
 	if len(body) == 0 {
 		return 0, 0, 0, 0
 	}
-	// OpenAI format: cached_tokens at top level of usage
-	var openai struct {
+	// OpenAI Chat Completions format: usage.prompt_tokens_details.cached_tokens
+	var openaiChat struct {
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
-			CachedTokens     int `json:"cached_tokens"`
+			PromptTokens        int `json:"prompt_tokens"`
+			CompletionTokens    int `json:"completion_tokens"`
+			TotalTokens         int `json:"total_tokens"`
+			PromptTokensDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
-	if json.Unmarshal(body, &openai) == nil && openai.Usage.TotalTokens > 0 {
-		return openai.Usage.PromptTokens, openai.Usage.CompletionTokens, openai.Usage.TotalTokens, openai.Usage.CachedTokens
+	if json.Unmarshal(body, &openaiChat) == nil && openaiChat.Usage.PromptTokens > 0 {
+		return openaiChat.Usage.PromptTokens, openaiChat.Usage.CompletionTokens, openaiChat.Usage.TotalTokens, openaiChat.Usage.PromptTokensDetails.CachedTokens
+	}
+	// OpenAI Responses API format: usage.input_tokens_details.cached_tokens
+	var openaiResp struct {
+		Usage struct {
+			InputTokens        int `json:"input_tokens"`
+			OutputTokens       int `json:"output_tokens"`
+			TotalTokens        int `json:"total_tokens"`
+			InputTokensDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"input_tokens_details"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(body, &openaiResp) == nil && openaiResp.Usage.TotalTokens > 0 {
+		return openaiResp.Usage.InputTokens, openaiResp.Usage.OutputTokens, openaiResp.Usage.TotalTokens, openaiResp.Usage.InputTokensDetails.CachedTokens
 	}
 	// Anthropic format: cache_read_input_tokens
 	var anthropic struct {
