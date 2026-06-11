@@ -203,3 +203,55 @@ func (s *Store) SetDebugMode(enabled bool) error {
 	_, err := s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('debug', ?)", val)
 	return err
 }
+
+// ResetProviderUsage zeroes all usage counters for a provider and deletes its usage time-series.
+func (s *Store) ResetProviderUsage(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
+		"UPDATE providers SET prompt_tokens=0, completion_tokens=0, total_tokens=0, cached_tokens=0, usage_updated_at=0 WHERE id=?",
+		id,
+	); err != nil {
+		return fmt.Errorf("failed to reset provider usage: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		"DELETE FROM provider_usage_points WHERE provider_id=?",
+		id,
+	); err != nil {
+		return fmt.Errorf("failed to delete usage points: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// ResetAllProviderUsage zeroes usage counters for all providers and deletes all usage time-series.
+func (s *Store) ResetAllProviderUsage() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
+		"UPDATE providers SET prompt_tokens=0, completion_tokens=0, total_tokens=0, cached_tokens=0, usage_updated_at=0",
+	); err != nil {
+		return fmt.Errorf("failed to reset all provider usage: %w", err)
+	}
+
+	if _, err := tx.Exec("DELETE FROM provider_usage_points"); err != nil {
+		return fmt.Errorf("failed to delete all usage points: %w", err)
+	}
+
+	return tx.Commit()
+}

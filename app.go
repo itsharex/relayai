@@ -224,6 +224,16 @@ func (a *App) ClearProxyLogs() {
 	a.proxy.ClearLogs()
 }
 
+// ResetProviderUsage zeroes all usage counters for a single provider and clears its time-series.
+func (a *App) ResetProviderUsage(id string) error {
+	return a.store.ResetProviderUsage(id)
+}
+
+// ResetAllProviderUsage zeroes usage counters for all providers and clears all time-series.
+func (a *App) ResetAllProviderUsage() error {
+	return a.store.ResetAllProviderUsage()
+}
+
 func (a *App) GetProxyLogData() ProxyLogData {
 	return a.buildLogData(a.proxy.GetLogs())
 }

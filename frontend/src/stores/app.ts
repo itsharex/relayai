@@ -217,6 +217,16 @@ export const useAppStore = defineStore('app', () => {
     clearLogsLocal()
   }
 
+  async function resetProviderUsage(id: string) {
+    await App.ResetProviderUsage(id)
+    await fetchProviders()
+  }
+
+  async function resetAllProviderUsage() {
+    await App.ResetAllProviderUsage()
+    await fetchProviders()
+  }
+
   async function startProxy() {
     await App.ProxyStart()
     await fetchProxyStatus()
@@ -249,5 +259,7 @@ export const useAppStore = defineStore('app', () => {
     fetchProviderUsageSeries,
     clearLogs,
     fetchLogsByTimeRange,
+    resetProviderUsage,
+    resetAllProviderUsage,
   }
 })

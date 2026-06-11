@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useMessage } from 'naive-ui'
 import type { Provider, ProviderUsagePoint, CLIType } from '../stores/app'
 import { CLI_TYPES, useAppStore } from '../stores/app'
 import CLIIcon from './CLIIcon.vue'
@@ -15,6 +16,8 @@ const emit = defineEmits<{
 }>()
 
 const store = useAppStore()
+const message = useMessage()
+const resetLoading = ref(false)
 const usageSeries = ref<ProviderUsagePoint[]>([])
 const loadingSeries = ref(false)
 const hoverIndex = ref(-1)
@@ -67,6 +70,19 @@ watch(
   },
   { immediate: true }
 )
+
+async function handleResetUsage() {
+  if (!props.provider) return
+  resetLoading.value = true
+  try {
+    await store.resetProviderUsage(props.provider.id)
+    message.success('用量已重置')
+  } catch {
+    message.error('重置失败')
+  } finally {
+    resetLoading.value = false
+  }
+}
 
 function close() {
   emit('update:visible', false)
@@ -293,6 +309,15 @@ function handleChartMouseLeave() {
       </div>
 
       <!-- Stats cards -->
+      <div class="stats-header">
+        <span class="stats-title">用量统计</span>
+        <n-popconfirm @positive-click="handleResetUsage">
+          <template #trigger>
+            <n-button text type="error" size="small" :loading="resetLoading">重置用量</n-button>
+          </template>
+          确认重置该提供商的所有用量统计？
+        </n-popconfirm>
+      </div>
       <div class="stats-grid">
         <div class="stat-card">
           <span class="stat-label">输入用量</span>
@@ -461,6 +486,19 @@ function handleChartMouseLeave() {
 }
 
 /* ---- Stats ---- */
+.stats-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.stats-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--app-text-2);
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
