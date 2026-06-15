@@ -44,6 +44,10 @@ html, body, #app {
   box-shadow: none !important;
   outline: none !important;
 }
+.n-button:focus .n-button__state-border,
+.n-button:focus-visible .n-button__state-border {
+  border-color: transparent !important;
+}
 
 /* 防止触控板滚动时整个页面弹性回弹 */
 html, body {
