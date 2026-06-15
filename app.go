@@ -18,7 +18,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-var providerNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var providerNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}_ -]*$`)
 
 // capitalizeCLI returns a display-friendly name for CLI types (e.g. "claude" -> "Claude").
 func capitalizeCLI(s string) string {
@@ -122,8 +122,12 @@ func (a *App) checkDuplicateProviderName(name string, updateID string) error {
 }
 
 func (a *App) ProviderCreate(name, baseURL, apiKey string, defaultModel string, modelMappings []config.ModelMapping, cliTypes []string, chatCompatMode bool) (config.Provider, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return config.Provider{}, fmt.Errorf("提供商名称不能为空")
+	}
 	if !providerNamePattern.MatchString(name) {
-		return config.Provider{}, fmt.Errorf("provider name only supports English letters, numbers, underscores, and hyphens")
+		return config.Provider{}, fmt.Errorf("提供商名称仅支持中文、英文、数字、空格、下划线和连字符")
 	}
 	if err := a.checkDuplicateProviderName(name, ""); err != nil {
 		return config.Provider{}, err
@@ -140,8 +144,12 @@ func (a *App) ProviderCreate(name, baseURL, apiKey string, defaultModel string, 
 }
 
 func (a *App) ProviderUpdate(id, name, baseURL, apiKey string, defaultModel string, modelMappings []config.ModelMapping, cliTypes []string, chatCompatMode bool) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("提供商名称不能为空")
+	}
 	if !providerNamePattern.MatchString(name) {
-		return fmt.Errorf("provider name only supports English letters, numbers, underscores, and hyphens")
+		return fmt.Errorf("提供商名称仅支持中文、英文、数字、空格、下划线和连字符")
 	}
 	if err := a.checkDuplicateProviderName(name, id); err != nil {
 		return err

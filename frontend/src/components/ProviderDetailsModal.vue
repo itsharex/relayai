@@ -18,6 +18,7 @@ const emit = defineEmits<{
 const store = useAppStore()
 const message = useMessage()
 const resetLoading = ref(false)
+const refreshLoading = ref(false)
 const usageSeries = ref<ProviderUsagePoint[]>([])
 const loadingSeries = ref(false)
 const hoverIndex = ref(-1)
@@ -81,6 +82,18 @@ async function handleResetUsage() {
     message.error('重置失败')
   } finally {
     resetLoading.value = false
+  }
+}
+
+async function handleRefreshUsage() {
+  refreshLoading.value = true
+  try {
+    await store.fetchProviders()
+    message.success('用量已刷新')
+  } catch {
+    message.error('刷新失败')
+  } finally {
+    refreshLoading.value = false
   }
 }
 
@@ -311,12 +324,25 @@ function handleChartMouseLeave() {
       <!-- Stats cards -->
       <div class="stats-header">
         <span class="stats-title">用量统计</span>
-        <n-popconfirm @positive-click="handleResetUsage">
-          <template #trigger>
-            <n-button text type="error" size="small" :loading="resetLoading">重置用量</n-button>
-          </template>
-          确认重置该提供商的所有用量统计？
-        </n-popconfirm>
+        <div class="usage-actions">
+          <n-button size="small" :loading="refreshLoading" @click="handleRefreshUsage">
+            <template #icon>
+              <n-icon><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg></n-icon>
+            </template>
+            刷新
+          </n-button>
+          <n-popconfirm @positive-click="handleResetUsage">
+            <template #trigger>
+              <n-button size="small" type="error" :loading="resetLoading">
+                <template #icon>
+                  <n-icon><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></n-icon>
+                </template>
+                重置
+              </n-button>
+            </template>
+            确认重置该提供商的所有用量统计？
+          </n-popconfirm>
+        </div>
       </div>
       <div class="stats-grid">
         <div class="stat-card">
@@ -497,6 +523,12 @@ function handleChartMouseLeave() {
   font-weight: 600;
   font-size: 14px;
   color: var(--app-text-2);
+}
+
+.usage-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 .stats-grid {

@@ -152,8 +152,8 @@ function handleCancel() {
       <n-divider style="margin: 8px 0" />
 
       <n-form-item label="名称" required>
-        <n-input :input-props="{ spellcheck: 'false' }" v-model:value="form.name" placeholder="例如：DeepSeek_01" />
-        <template #feedback>仅支持英文、数字、下划线和 -，名称不可重复</template>
+        <n-input :input-props="{ spellcheck: 'false' }" v-model:value="form.name" placeholder="例如：DeepSeek_01 或 深度求索" />
+        <template #feedback>支持中文、英文、数字、空格、下划线和连字符，名称不可重复</template>
       </n-form-item>
       <n-form-item label="API Base URL" required>
         <n-input :input-props="{ spellcheck: 'false' }" v-model:value="form.base_url" placeholder="例如：https://api.deepseek.com" />

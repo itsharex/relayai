@@ -15,7 +15,6 @@ const formVisible = ref(false)
 const editingProvider = ref<Provider | null>(null)
 const detailsVisible = ref(false)
 const selectedProviderId = ref('')
-const usageRefreshing = ref(false)
 let usageRefreshTimer: number | undefined
 
 const selectedProvider = computed(() => {
@@ -92,19 +91,6 @@ async function handleDelete(id: string) {
     message.error(getErrorMessage(e, '删除失败'))
   }
 }
-
-async function refreshUsageStats() {
-  usageRefreshing.value = true
-  try {
-    await store.fetchProviders()
-    message.success('用量已刷新')
-  } catch (e: any) {
-    message.error(getErrorMessage(e, '刷新失败'))
-  } finally {
-    usageRefreshing.value = false
-  }
-}
-
 </script>
 
 <template>
@@ -120,7 +106,6 @@ async function refreshUsageStats() {
           <n-text depth="3" style="font-size: 13px">管理 AI 模型提供方，启用后参与反代路由</n-text>
         </div>
         <div style="display: flex; gap: 8px">
-          <n-button :loading="usageRefreshing" @click="refreshUsageStats">刷新用量</n-button>
           <n-button type="primary" @mousedown.prevent @click="openAddForm">+ 添加提供商</n-button>
         </div>
       </div>
