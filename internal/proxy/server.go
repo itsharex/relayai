@@ -55,7 +55,7 @@ func (s *Server) Start() error {
 	s.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      handler,
-		WriteTimeout: 0, // 无写超时，支持长时间流式响应（深度思考）
+		WriteTimeout: 0, // No write timeout to support long SSE streams (deep thinking)
 	}
 
 	go func() {

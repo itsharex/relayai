@@ -17,6 +17,7 @@ const emit = defineEmits<{
 
 const store = useAppStore()
 const message = useMessage()
+
 const resetLoading = ref(false)
 const refreshLoading = ref(false)
 const usageSeries = ref<ProviderUsagePoint[]>([])
@@ -100,6 +101,16 @@ async function handleRefreshUsage() {
 function close() {
   emit('update:visible', false)
 }
+
+// Register modal close for Cmd+W handling (only when visible)
+const MODAL_ID = 'provider-details'
+watch(() => props.visible, (val) => {
+  if (val) {
+    store.registerModal(MODAL_ID, close)
+  } else {
+    store.unregisterModal(MODAL_ID)
+  }
+})
 
 function handleVisibleChange(val: boolean) {
   if (!val) close()

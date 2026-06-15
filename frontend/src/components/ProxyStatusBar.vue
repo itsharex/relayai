@@ -132,6 +132,7 @@ function onSpinEnd(cliType: string) {
 function showConfig() {
   showFullKey.value = false
   showConfigModal.value = true
+  store.registerModal('config-modal', () => { showConfigModal.value = false })
   // 移除按钮焦点，避免关闭弹窗后按钮仍有高亮
   nextTick(() => {
     document.activeElement instanceof HTMLElement && document.activeElement.blur()
@@ -215,7 +216,7 @@ async function copyConfig() {
 
     <n-modal
       :show="showConfigModal"
-      @update:show="(v: boolean) => showConfigModal = v"
+      @update:show="(v: boolean) => { showConfigModal = v; if (!v) store.unregisterModal('config-modal') }"
       title="查看配置"
       preset="card"
       style="width: 500px"

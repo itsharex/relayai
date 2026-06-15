@@ -73,10 +73,6 @@ func (a *App) setWindow(win application.Window) {
 	a.win = win
 }
 
-func (a *App) initProxy() error {
-	return a.proxy.Start()
-}
-
 // --- Proxy lifecycle ---
 
 func (a *App) ProxyStart() error {
@@ -183,7 +179,7 @@ func (a *App) WriteCLIConfig(cliType string) error {
 		return fmt.Errorf("没有可用的提供商")
 	}
 
-	// 选择第一个支持该 CLI 类型的 provider
+	// Select the first provider that supports this CLI type
 	var provider *config.Provider
 	for _, p := range enabled {
 		if len(p.CLITypes) == 0 || slices.Contains(p.CLITypes, cliType) {

@@ -10,6 +10,10 @@ make fmt && make test
 
 Do NOT consider a task done until both pass.
 
+## Git Commit Policy
+
+**DO NOT commit code unless the user explicitly asks you to.** After making changes, always run `make fmt && make test` to verify correctness, but leave the changes unstaged. Only commit when the user explicitly says so (e.g., "提交", "commit", "帮我提交").
+
 ## Commands
 
 ```bash

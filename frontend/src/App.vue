@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onMounted, onUnmounted } from 'vue'
 import { dateZhCN, zhCN } from 'naive-ui'
 import { useTheme } from './composables/useTheme'
+import { useAppStore } from './stores/app'
 import type { ThemeMode } from './composables/useTheme'
 import * as App from '../bindings/relay-ai/app'
 import { WindowMinimise, WindowToggleMaximise, WindowClose } from '../bindings/relay-ai/app'
@@ -41,7 +42,28 @@ function onClose() { WindowClose().catch(() => {}) }
 
 const { themeMode, theme, setTheme } = useTheme()
 
+const store = useAppStore()
+
 const isMac = computed(() => navigator.platform.toLowerCase().includes('mac'))
+
+// Cmd+W: close active modal instead of hiding window
+function onKeyDown(e: KeyboardEvent) {
+  if (e.metaKey && e.key === 'w') {
+    if (store.closeActiveModal()) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    // If no modal is open, let native behavior hide the window
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', onKeyDown, true)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', onKeyDown, true)
+})
 
 const themeOptions: { label: string; value: ThemeMode }[] = [
   { label: '跟随系统', value: 'system' },

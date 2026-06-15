@@ -57,11 +57,11 @@ func makeHandler(store *config.Store, logger *Logger, sessions *SessionStore, cl
 
 		var providers []config.Provider
 		if token := extractBearerToken(r); strings.HasPrefix(token, "sk-local-") {
-			// 代理级 token：走默认路由（所有启用的 provider）
+			// Proxy-level token: use default routing (all enabled providers)
 			if token == store.GetProxyAuthToken() {
 				// fall through to default routing below
 			} else if p := store.GetProviderByAuthToken(token); p != nil {
-				// 提供商级 token：路由到特定 provider
+				// Provider-level token: route to specific provider
 				providers = []config.Provider{*p}
 			}
 		}
@@ -257,9 +257,6 @@ func toInt(v any) int {
 		return n
 	case int64:
 		return int(n)
-	case json.Number:
-		i, _ := n.Int64()
-		return int(i)
 	}
 	return 0
 }
@@ -290,14 +287,10 @@ func singleJoiningSlash(a, b string) string {
 func extractBearerToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
-		auth = r.Header.Get("x-api-key")
-		if auth == "" {
-			return ""
-		}
-		return auth
+		return r.Header.Get("x-api-key")
 	}
-	if strings.HasPrefix(auth, "Bearer ") {
-		return auth[7:]
+	if bearer, ok := strings.CutPrefix(auth, "Bearer "); ok {
+		return bearer
 	}
 	return auth
 }
@@ -351,14 +344,12 @@ func extractTokenUsage(body []byte) (prompt, completion, total, cached int) {
 
 func sanitizeResponseBody(body []byte) string {
 	const maxLen = 4096
-	s := string(body)
-	var cleaned strings.Builder
-	for _, r := range s {
+	result := strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' || r == '\t' || r >= 32 {
-			cleaned.WriteRune(r)
+			return r
 		}
-	}
-	result := cleaned.String()
+		return -1
+	}, string(body))
 	if len(result) > maxLen {
 		result = result[:maxLen] + "...(truncated)"
 	}

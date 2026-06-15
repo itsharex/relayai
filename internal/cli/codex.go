@@ -2,7 +2,7 @@ package cli
 
 import (
 	"bytes"
-	"fmt"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,12 +109,21 @@ func EnableCodexProvider(baseURL, apiKey string) error {
 	}
 
 	authPath, _ := codexAuthPath()
-	authContent := fmt.Sprintf("{\n  \"auth_mode\": \"apikey\",\n  \"OPENAI_API_KEY\": \"%s\"\n}\n", apiKey)
-	if err := os.WriteFile(authPath, []byte(authContent), 0600); err != nil {
+	authData := map[string]string{
+		"auth_mode":      "apikey",
+		"OPENAI_API_KEY": apiKey,
+	}
+	authBytes, _ := json.MarshalIndent(authData, "", "  ")
+	if err := os.WriteFile(authPath, append(authBytes, '\n'), 0600); err != nil {
 		return err
 	}
 
 	envPath, _ := codexEnvPath()
-	envContent := fmt.Sprintf("# RelayAI auto-generated\nexport OPENAI_API_KEY=\"%s\"\n", apiKey)
+	envContent := "# RelayAI auto-generated\nexport OPENAI_API_KEY=" + shellQuote(apiKey) + "\n"
 	return os.WriteFile(envPath, []byte(envContent), 0644)
+}
+
+// shellQuote wraps s in single quotes for safe use in shell assignments.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

@@ -166,10 +166,7 @@ func tryProvider(w http.ResponseWriter, r *http.Request, upstreamURL string, bod
 	if isStream && convertToResponses {
 		preResponseID = sessions.NewID()
 		msgItemID = fmt.Sprintf("msg_%d", time.Now().UnixNano())
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("X-Accel-Buffering", "no")
+		setSSEHeaders(w)
 		w.WriteHeader(http.StatusOK)
 		sendResponseCreated(w, preResponseID, requestModel, &writeMu)
 
@@ -198,17 +195,17 @@ func tryProvider(w http.ResponseWriter, r *http.Request, upstreamURL string, bod
 		}()
 	}
 
-	// 使用优化的 Transport 配置，显式设置连接参数以适配长 SSE 流。
-	// http.Client.Timeout 保持为 0（不设超时），由请求 context 控制生命周期。
+	// Use optimized Transport settings with explicit connection parameters for long SSE streams.
+	// http.Client.Timeout stays 0 (no timeout); request context controls lifecycle.
 	client := &http.Client{
 		Transport: sharedUpstreamTransport,
 	}
 
-	// 初始连接重试：仅对瞬态网络错误（连接拒绝、重置、TLS 超时等）进行重试，
-	// 客户端主动断开（context 取消）不重试。
+	// Initial connection retry: only retry on transient network errors (connection refused, reset, TLS timeout,
+	// etc.); do not retry on client disconnect (context cancellation).
 	var upResp *http.Response
 	for attempt := 0; attempt <= upstreamMaxRetries; attempt++ {
-		// 每次重试需要重建 request body（上一次 client.Do 可能已部分消费）
+		// Rebuild request body on each retry (previous client.Do may have partially consumed it)
 		if attempt > 0 {
 			req.Body = io.NopCloser(bytes.NewReader(body))
 			req.ContentLength = int64(len(body))
@@ -421,16 +418,13 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 	}
 
 	// Passthrough mode
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
+	setSSEHeaders(w)
 	if v := resp.Header.Get("x-request-id"); v != "" {
 		w.Header().Set("x-request-id", v)
 	}
 	w.WriteHeader(resp.StatusCode)
 
-	// 启动 keep-alive，避免深度思考时客户端因长时间无数据而断开
+	// Start keep-alive to prevent client disconnect during long thinking phases
 	var passthroughKeepAliveDone chan struct{}
 	if canFlush {
 		passthroughKeepAliveDone = make(chan struct{})
@@ -483,7 +477,7 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 	}()
 	defer close(fwdStopMonitor)
 
-	// 监听客户端断开信号
+	// Watch for client disconnect
 	go func() {
 		<-ctx.Done()
 		resp.Body.Close()
@@ -628,7 +622,7 @@ func buildContinueBody(originalBody []byte, accumulatedText string) ([]byte, err
 	// Get existing messages
 	messages, ok := m["messages"].([]any)
 	if !ok {
-		return nil, fmt.Errorf("no messages array in body")
+		return nil, errors.New("no messages array in body")
 	}
 
 	// Append assistant message with the accumulated (truncated) text

@@ -86,6 +86,26 @@ export const useAppStore = defineStore('app', () => {
   // 记录上次获取的最大 ID，用于增量拉取
   let lastLogId = ''
 
+  // Track active modal close callbacks for Cmd+W handling
+  const modalCloseCallbacks = ref<Map<string, () => void>>(new Map())
+
+  function registerModal(id: string, closeFn: () => void) {
+    modalCloseCallbacks.value.set(id, closeFn)
+  }
+
+  function unregisterModal(id: string) {
+    modalCloseCallbacks.value.delete(id)
+  }
+
+  function closeActiveModal(): boolean {
+    // Close the last registered modal
+    const entries = Array.from(modalCloseCallbacks.value.entries())
+    if (entries.length === 0) return false
+    const [id, closeFn] = entries[entries.length - 1]
+    closeFn()
+    return true
+  }
+
   let statusTimer: ReturnType<typeof setInterval> | null = null
 
   function startStatusPolling() {
@@ -192,7 +212,7 @@ export const useAppStore = defineStore('app', () => {
   // 按日期范围过滤日志（使用已验证可用的 GetProxyLogData + 前端过滤）
   async function fetchLogsByTimeRange(from: number, to: number) {
     try {
-      const data = await App.GetProxyLogData()
+      const data = await App.GetProxyLogDataWithLimit(5000)
       const allLogs = (data.logs || []) as any[]
       const filtered = allLogs.filter((log: any) => log.time >= from && log.time <= to)
       logs.value = filtered.slice(0, MAX_DISPLAY_LOGS)
@@ -261,5 +281,8 @@ export const useAppStore = defineStore('app', () => {
     fetchLogsByTimeRange,
     resetProviderUsage,
     resetAllProviderUsage,
+    registerModal,
+    unregisterModal,
+    closeActiveModal,
   }
 })

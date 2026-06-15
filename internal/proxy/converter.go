@@ -156,17 +156,6 @@ func chatMessageToMap(msg ChatMessage) map[string]any {
 	return m
 }
 
-// ensureMCPName ensures MCP function names use the proper namespace format.
-// codex-relay splits mcp__server__fn → namespace=mcp__server__, name=fn.
-// When replaying, we need to reconstruct the full name with namespace.
-func ensureMCPName(name string) string {
-	// Already has mcp__ prefix, use as-is
-	if strings.HasPrefix(name, "mcp__") {
-		return name
-	}
-	return name
-}
-
 // appendInputItems processes Responses API input items and appends them to messages.
 // Aligned with codex-relay's to_chat_request input processing.
 func appendInputItems(messages []map[string]any, input any, historyCallIDs, historyToolResponses map[string]bool, sessions *SessionStore) []map[string]any {

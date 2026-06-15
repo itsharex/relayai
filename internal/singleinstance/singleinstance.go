@@ -10,30 +10,30 @@ import (
 	"syscall"
 )
 
-// LockFile 尝试获取单实例锁，返回 unlock 函数和 error
-// 如果已有实例在运行，返回 error
+// LockFile attempts to acquire a single-instance lock.
+// Returns an error if another instance is already running.
 func LockFile() (unlock func(), err error) {
 	lockPath, err := lockFilePath()
 	if err != nil {
-		return nil, fmt.Errorf("获取锁文件路径失败: %w", err)
+		return nil, fmt.Errorf("failed to get lock file path: %w", err)
 	}
 
-	// 检查是否已有实例在运行
+	// Check if another instance is already running
 	if data, err := os.ReadFile(lockPath); err == nil {
 		pidStr := strings.TrimSpace(string(data))
 		if pid, err := strconv.Atoi(pidStr); err == nil {
 			if isProcessAlive(pid) {
-				return nil, fmt.Errorf("RelayAI 已在运行中 (PID: %d)", pid)
+				return nil, fmt.Errorf("RelayAI is already running (PID: %d)", pid)
 			}
 		}
 	}
 
-	// 写入当前 PID
+	// Write current PID
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0755); err != nil {
-		return nil, fmt.Errorf("创建锁目录失败: %w", err)
+		return nil, fmt.Errorf("failed to create lock directory: %w", err)
 	}
 	if err := os.WriteFile(lockPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
-		return nil, fmt.Errorf("写入锁文件失败: %w", err)
+		return nil, fmt.Errorf("failed to write lock file: %w", err)
 	}
 
 	unlock = func() {

@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	usageRetention = 7 * 24 * time.Hour // 用量曲线保留 7 天
-	maxLogCount    = 5000               // 日志最多保留 5000 条
+	usageRetention = 7 * 24 * time.Hour // Usage points retention period
+	maxLogCount    = 5000               // Maximum number of request logs
 )
 
 type RequestLog struct {
@@ -54,14 +54,14 @@ func NewLogger(db *sql.DB) *Logger {
 }
 
 func (l *Logger) init() {
-	// 获取当前最大序号（必须同步，保证后续 ID 不冲突）
+	// Get current max sequence number (must be synchronous to avoid ID conflicts)
 	var maxID sql.NullInt64
 	l.db.QueryRow("SELECT MAX(CAST(id AS INTEGER)) FROM request_logs").Scan(&maxID)
 	if maxID.Valid {
 		l.seq = maxID.Int64
 	}
 
-	// 清理放到后台执行，不阻塞启动
+	// Run cleanup in background to avoid blocking startup
 	go l.cleanupLoop()
 }
 
@@ -71,19 +71,19 @@ func (l *Logger) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
-		// 删除超过 7 天的用量曲线
+		// Delete usage points older than 7 days
 		cutoff := time.Now().Add(-usageRetention).UnixMilli()
 		if _, err := l.db.Exec("DELETE FROM provider_usage_points WHERE bucket_start < ?", cutoff); err != nil {
 			slog.Error("failed to cleanup old usage points", "error", err)
 		}
 
-		// 删除超过 7 天的日志
+		// Delete request logs older than 7 days
 		logCutoff := time.Now().Add(-7 * 24 * time.Hour).UnixMilli()
 		if _, err := l.db.Exec("DELETE FROM request_logs WHERE time < ?", logCutoff); err != nil {
 			slog.Error("failed to cleanup old request logs by time", "error", err)
 		}
 
-		// 删除超出条数上限的日志
+		// Delete logs exceeding count limit
 		if _, err := l.db.Exec(
 			"DELETE FROM request_logs WHERE id NOT IN (SELECT id FROM request_logs ORDER BY time DESC LIMIT ?)",
 			maxLogCount,
@@ -109,7 +109,7 @@ func (l *Logger) Add(entry RequestLog) {
 		slog.Error("failed to write request log", "error", err)
 	}
 
-	// 异步写入用量，不阻塞日志主流程
+	// Write usage asynchronously to avoid blocking the main logging path
 	go l.addProviderUsage(entry)
 }
 

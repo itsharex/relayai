@@ -157,7 +157,7 @@ func main() {
 		}
 	}()
 
-	if err := app.initProxy(); err != nil {
+	if err := app.ProxyStart(); err != nil {
 		slog.Error("failed to start proxy", "error", err)
 	}
 

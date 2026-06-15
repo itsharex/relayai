@@ -2,7 +2,7 @@
 import { ref, watch, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import type { Provider, ModelMapping, CLIType } from '../stores/app'
-import { CLI_TYPES } from '../stores/app'
+import { CLI_TYPES, useAppStore } from '../stores/app'
 import CLIIcon from './CLIIcon.vue'
 
 const props = defineProps<{
@@ -24,6 +24,22 @@ const emit = defineEmits<{
 }>()
 
 const message = useMessage()
+const store = useAppStore()
+
+function handleCancel() {
+  emit('update:visible', false)
+}
+
+// Register modal close for Cmd+W handling
+const MODAL_ID = 'provider-form'
+
+watch(() => props.visible, (val) => {
+  if (val) {
+    store.registerModal(MODAL_ID, handleCancel)
+  } else {
+    store.unregisterModal(MODAL_ID)
+  }
+})
 
 const form = ref({
   name: '',
@@ -78,8 +94,8 @@ function handleSubmit() {
     message.warning('请输入名称')
     return
   }
-  if (!/^[A-Za-z0-9_-]+$/.test(form.value.name.trim())) {
-    message.warning('名称只支持英文、数字、下划线和 -')
+  if (!/^[\p{L}\p{N}][\p{L}\p{N}_ -]*$/u.test(form.value.name.trim())) {
+    message.warning('名称只支持中文、英文、数字、空格、下划线和连字符')
     return
   }
   if (!form.value.base_url.trim()) {
@@ -111,9 +127,7 @@ function handleSubmit() {
   })
 }
 
-function handleCancel() {
-  emit('update:visible', false)
-}
+
 </script>
 
 <template>

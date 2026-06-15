@@ -16,18 +16,18 @@ type DB struct {
 func New() (*DB, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("获取用户目录失败: %w", err)
+		return nil, fmt.Errorf("failed to get user home dir: %w", err)
 	}
 
 	dir := filepath.Join(home, ".relayai")
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("创建目录失败: %w", err)
+		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	dbPath := filepath.Join(dir, "relayai.db")
 	conn, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("打开数据库失败: %w", err)
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
 	db := &DB{conn: conn}
@@ -40,12 +40,12 @@ func New() (*DB, error) {
 }
 
 func (db *DB) init() error {
-	// 启用 WAL 模式
+	// Enable WAL mode
 	if _, err := db.conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		return fmt.Errorf("设置 WAL 模式失败: %w", err)
+		return fmt.Errorf("failed to enable WAL mode: %w", err)
 	}
 
-	// 创建表
+	// Create tables
 	if err := db.createTables(); err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (db *DB) createTables() error {
 
 	for _, q := range queries {
 		if _, err := db.conn.Exec(q); err != nil {
-			return fmt.Errorf("创建表失败: %w", err)
+			return fmt.Errorf("failed to create tables: %w", err)
 		}
 	}
 
@@ -138,7 +138,7 @@ func (db *DB) migrateTables() error {
 		}
 		if !exists {
 			if _, err := db.conn.Exec(statement); err != nil {
-				return fmt.Errorf("迁移字段失败 %s.%s: %w", table, column, err)
+				return fmt.Errorf("failed to migrate column %s.%s: %w", table, column, err)
 			}
 		}
 	}
@@ -157,7 +157,7 @@ func splitTableColumn(key string) (string, string) {
 func (db *DB) columnExists(table, column string) (bool, error) {
 	rows, err := db.conn.Query("PRAGMA table_info(" + table + ")")
 	if err != nil {
-		return false, fmt.Errorf("查询表结构失败: %w", err)
+		return false, fmt.Errorf("failed to query table info: %w", err)
 	}
 	defer rows.Close()
 

@@ -3,9 +3,12 @@ package config
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 )
+
+const defaultPort = 18900
 
 type Store struct {
 	mu sync.RWMutex
@@ -23,8 +26,8 @@ func NewStore(db *sql.DB) (*Store, error) {
 func (s *Store) init() error {
 	var port int
 	err := s.db.QueryRow("SELECT value FROM settings WHERE key = 'port'").Scan(&port)
-	if err == sql.ErrNoRows {
-		_, err = s.db.Exec("INSERT INTO settings (key, value) VALUES ('port', '18900')")
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = s.db.Exec("INSERT INTO settings (key, value) VALUES ('port', ?)", defaultPort)
 		if err != nil {
 			return fmt.Errorf("failed to init port config: %w", err)
 		}
@@ -38,7 +41,7 @@ func (s *Store) getPort() int {
 	var port int
 	err := s.db.QueryRow("SELECT value FROM settings WHERE key = 'port'").Scan(&port)
 	if err != nil {
-		return 18900
+		return defaultPort
 	}
 	return port
 }
@@ -66,7 +69,7 @@ func (s *Store) GetProxyAuthToken() string {
 
 	var token string
 	err := s.db.QueryRow("SELECT value FROM settings WHERE key = 'proxy_auth_token'").Scan(&token)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		token = generateAuthToken()
 		s.db.Exec("INSERT INTO settings (key, value) VALUES ('proxy_auth_token', ?)", token)
 	}

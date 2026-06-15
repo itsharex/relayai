@@ -44,7 +44,7 @@ func NewProvider(name, baseURL, apiKey string) Provider {
 	}
 }
 
-// generateAuthToken 生成本地密钥 sk-local-<40位hex>
+// generateAuthToken generates a local key sk-local-<40 hex chars>
 func generateAuthToken() string {
 	b := make([]byte, 20)
 	rand.Read(b)

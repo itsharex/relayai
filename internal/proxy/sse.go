@@ -16,6 +16,14 @@ import (
 	"time"
 )
 
+// setSSEHeaders sets the standard response headers for SSE streaming.
+func setSSEHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+}
+
 type toolCallAccum struct {
 	id        string
 	name      string
@@ -111,10 +119,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 			return
 		}
 		headersSent = true
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("X-Accel-Buffering", "no")
+		setSSEHeaders(w)
 		w.WriteHeader(resp.StatusCode)
 	}
 
@@ -130,8 +135,6 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 		b = append(b, eventType...)
 		b = append(b, `",`...)
 		b = append(b, fieldsJSON[1:]...)
-		if seq <= 10 || eventType == "response.completed" || eventType == "response.output_item.done" {
-		}
 		writeMu.Lock()
 		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, b); err != nil {
 			writeMu.Unlock()
@@ -199,7 +202,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 	}()
 	defer close(stopMonitor)
 
-	// 监听客户端断开信号
+	// Watch for client disconnect
 	go func() {
 		<-ctx.Done()
 		resp.Body.Close()
@@ -220,8 +223,6 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 		}
 
 		chunkCount++
-		if chunkCount <= 3 {
-		}
 
 		var chunk struct {
 			ID      string `json:"id"`
@@ -253,7 +254,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			slog.Error("codex-sse chunk parse error", "chunk", chunkCount, "error", err)
-			continue // 跳过这个 chunk，继续处理下一个
+			continue // Skip this chunk and continue
 		}
 		if len(chunk.Choices) == 0 {
 			if chunk.Usage != nil {
@@ -423,7 +424,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 			},
 		})
 	} else if len(toolCalls) == 0 {
-		// 纯推理模型无实际 content 时，输出空 message（对齐 codex-relay）
+		// For reasoning-only models with no content, emit empty message (matching codex-relay)
 		writeEvent("response.output_item.added", map[string]any{
 			"output_index": 0,
 			"item": map[string]any{
