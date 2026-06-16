@@ -40,6 +40,11 @@ const (
 	// maxContinueAttempts is the maximum number of auto-continue retries
 	// when the upstream model hits max_output_tokens (finish_reason == "length").
 	maxContinueAttempts = 3
+
+	// upstreamReadTimeout is the maximum silence duration before closing an idle upstream connection.
+	// Set to 15 minutes to accommodate deep thinking scenarios where the model may not send
+	// any SSE events for extended periods during complex reasoning.
+	upstreamReadTimeout = 15 * time.Minute
 )
 
 // sharedUpstreamTransport is a shared http.Transport with optimized settings for SSE streaming.
@@ -53,7 +58,7 @@ var sharedUpstreamTransport = &http.Transport{
 	ForceAttemptHTTP2:     true,
 	DisableKeepAlives:     false,
 	TLSHandshakeTimeout:   30 * time.Second,
-	ResponseHeaderTimeout: 60 * time.Second, // Abort if upstream stalls before sending any headers
+	ResponseHeaderTimeout: 5 * time.Minute, // Abort if upstream stalls before sending any headers (increased for deep thinking)
 	MaxIdleConns:          100,
 	MaxIdleConnsPerHost:   10,
 	IdleConnTimeout:       90 * time.Second,
@@ -192,7 +197,7 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 			case <-ticker.C:
 				last := time.Unix(0, lastActivityUnixNano)
 				silence := time.Since(last)
-				if silence > 3*time.Minute {
+				if silence > upstreamReadTimeout {
 					slog.Warn("upstream read timeout, closing connection", "silence", silence.String(), "model", requestModel)
 					resp.Body.Close()
 					return
@@ -386,27 +391,17 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 	ensureHeaders()
 
 	if !streamDone {
-		// Stream disconnected before [DONE]
-		slog.Error("stream incomplete",
+		// Stream disconnected before [DONE].
+		// Set streamFinishReason to "stream_incomplete" so the caller can handle it properly.
+		// Do NOT send response.failed here — the caller (tryProvider/emitFinalCompletionEvents)
+		// will emit the final events with the correct status.
+		slog.Warn("stream incomplete before [DONE]",
 			"model", requestModel,
 			"chunks", chunkCount,
 			"has_tool_calls", len(toolCalls) > 0,
 			"text_length", accumulatedText.Len(),
 		)
-		writeEvent("response.failed", map[string]any{
-			"response": map[string]any{
-				"id":     responseID,
-				"status": "failed",
-				"error": map[string]any{
-					"code":    "stream_incomplete",
-					"message": "stream disconnected before completion",
-				},
-			},
-		})
-		if canFlush {
-			flusher.Flush()
-		}
-		return
+		streamFinishReason = "stream_incomplete"
 	}
 
 	// Message output_item.done — skip if we will auto-continue (caller emits final events)
@@ -610,7 +605,11 @@ func translateStream(ctx context.Context, w http.ResponseWriter, resp *http.Resp
 		},
 	}
 	if status == "incomplete" {
-		completedEventResp["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+		reason := "max_output_tokens"
+		if streamFinishReason == "stream_incomplete" {
+			reason = "stream_disconnected"
+		}
+		completedEventResp["incomplete_details"] = map[string]any{"reason": reason}
 	}
 	// Skip response.completed if we will auto-continue (caller emits final events)
 	if streamFinishReason != "length" {

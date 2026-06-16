@@ -467,7 +467,7 @@ func forwardStream(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 			case <-ticker.C:
 				last := time.Unix(0, fwdLastActivityUnixNano)
 				silence := time.Since(last)
-				if silence > 3*time.Minute {
+				if silence > upstreamReadTimeout {
 					slog.Warn("upstream passthrough read timeout, closing connection", "silence", silence.String(), "model", requestModel)
 					resp.Body.Close()
 					return
@@ -675,7 +675,7 @@ func emitFinalCompletionEvents(w http.ResponseWriter, responseID, requestModel s
 
 	// response.completed
 	status := "completed"
-	if finishReason == "length" || finishReason == "content_filter" {
+	if finishReason == "length" || finishReason == "content_filter" || finishReason == "stream_incomplete" {
 		status = "incomplete"
 	}
 	completedResp := map[string]any{
@@ -700,7 +700,11 @@ func emitFinalCompletionEvents(w http.ResponseWriter, responseID, requestModel s
 		},
 	}
 	if status == "incomplete" {
-		completedResp["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+		reason := "max_output_tokens"
+		if finishReason == "stream_incomplete" {
+			reason = "stream_disconnected"
+		}
+		completedResp["incomplete_details"] = map[string]any{"reason": reason}
 	}
 	writeSSEEvent("response.completed", map[string]any{
 		"response": completedResp,
